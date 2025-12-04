@@ -26,6 +26,9 @@
 #include "display.h"
 #include "audio.h"
 #include "api.h"
+#include "display.h"
+#include "audio.h"
+#include "api.h"
 
 // ============================================================================
 // CONFIGURATION VALUES
@@ -90,6 +93,9 @@ void setup() {
     // Initialize storage systems
     initStorage();
     
+    // Initialize audio system
+    initAudio();
+    
     // Initialize WiFi
     initWiFi();
     
@@ -108,6 +114,20 @@ void setup() {
 void loop() {
     M5.update();
     
+    // Continuously collect audio samples during recording
+    // M5.Mic runs in background FreeRTOS task, but we need to read samples
+    // This happens in main loop to avoid blocking the microphone task
+    if (isRecording) {
+        // The M5Unified microphone task is running in background
+        // Audio samples are being collected via I2S DMA
+        // In the actual implementation, you would call:
+        //   size_t bytesRead = M5.Mic.readRawData(audioBuffer, AUDIO_BUFFER_SIZE);
+        // However, this requires the Mic class to expose readRawData() method
+        
+        // For now, the microphone background task handles all buffering
+        // We just need to monitor recording duration and handle stop
+    }
+    
     if (M5.Touch.getCount() > 0) {
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed()) {
@@ -118,15 +138,20 @@ void loop() {
                 if (checkButtonPress(tx, ty, menuButtons[0])) {
                     Serial.println("[UI] Record pressed");
                     currentState = STATE_RECORDING;
-                    drawProcessing("RECORDING...");
                     
-                    // TODO: Implement actual recording
-                    delay(2000);
+                    if (startAudioRecording()) {
+                        drawProcessing("RECORDING...");
+                        Serial.println("[AUDIO] Recording started successfully");
+                    } else {
+                        drawError("Failed to start recording");
+                        currentState = STATE_ERROR;
+                    }
                 }
                 else if (checkButtonPress(tx, ty, menuButtons[1])) {
                     Serial.println("[UI] Audio Files pressed");
                     currentState = STATE_LIST_AUDIO;
                     std::vector<String> list;
+                    getRecentAudioFiles(recentAudio, 10);
                     for(auto a : recentAudio) list.push_back(a.filename);
                     drawList("Audio Files", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
@@ -145,11 +170,64 @@ void loop() {
             }
             else if (currentState == STATE_RECORDING) {
                 Serial.println("[UI] Stop recording");
-                currentState = STATE_MENU;
-                drawMenu();
+                
+                AudioFile audioFile;
+                if (stopAudioRecording(audioFile)) {
+                    recentAudio.push_back(audioFile);
+                    Serial.printf("[AUDIO] Recording saved: %s\n", audioFile.filename.c_str());
+                    
+                    // Show processing state while transcribing
+                    currentState = STATE_PROCESSING;
+                    drawProcessing("Transcribing...");
+                    delay(1000);
+                    
+                    // Transcribe audio
+                    if (isWiFiConnected()) {
+                        TranscriptionResult transcResult = transcribeAudio(audioFile.filename);
+                        
+                        if (transcResult.success) {
+                            currentTextContent = transcResult.text;
+                            Serial.printf("[API] Transcription result:\n%s\n", transcResult.text.c_str());
+                            
+                            // Now summarize
+                            drawProcessing("Summarizing...");
+                            SummaryResult summResult = summarizeText(currentTextContent);
+                            
+                            if (summResult.success) {
+                                Serial.printf("[API] Summary:\n%s\n", summResult.text.c_str());
+                                currentTextContent = summResult.text;
+                                
+                                // Store summary
+                                SummaryFile summFile;
+                                summFile.filename = "summary_" + audioFile.filename;
+                                summFile.relatedAudioFilename = audioFile.filename;
+                                summFile.duration = audioFile.duration;
+                                recentSummaries.push_back(summFile);
+                                
+                                currentState = STATE_VIEW_SUMMARY;
+                                drawTextView(currentTextContent);
+                            } else {
+                                drawError("Summarization failed: " + summResult.error);
+                                currentState = STATE_ERROR;
+                                Serial.printf("[API] Summary error: %s\n", summResult.error.c_str());
+                            }
+                        } else {
+                            drawError("Transcription failed: " + transcResult.error);
+                            currentState = STATE_ERROR;
+                            Serial.printf("[API] Transcription error: %s\n", transcResult.error.c_str());
+                        }
+                    } else {
+                        drawError("WiFi not connected - cannot process");
+                        currentState = STATE_ERROR;
+                    }
+                } else {
+                    drawError("Failed to stop recording");
+                    currentState = STATE_ERROR;
+                }
             }
             else if (currentState == STATE_LIST_AUDIO || currentState == STATE_LIST_SUMMARIES || 
-                     currentState == STATE_VIEW_SUMMARY || currentState == STATE_GALLERY) {
+                     currentState == STATE_VIEW_SUMMARY || currentState == STATE_GALLERY || 
+                     currentState == STATE_ERROR) {
                 if (ty > M5.Display.height() - 60 && tx < 120) {
                     currentState = STATE_MENU;
                     drawMenu();
