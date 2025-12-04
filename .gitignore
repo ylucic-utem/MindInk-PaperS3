@@ -3,3 +3,20 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Security: Never commit credentials
+src/config.cpp
+.env
+.env.local
+credentials.txt
+
+# IDE and build artifacts
+*.o
+*.a
+*.so
+*.out
+.DS_Store
+*.swp
+*.swo
+*~
+

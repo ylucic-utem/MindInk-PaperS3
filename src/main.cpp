@@ -30,12 +30,11 @@
 // ============================================================================
 // CONFIGURATION VALUES
 // ============================================================================
-const char* WIFI_SSID     = "D815 5g";
-const char* WIFI_PASS     = "inti815inti815";
+// IMPORTANT: These credentials are defined in src/config.cpp
+// Create your own config.cpp from config.cpp.example
+// DO NOT commit credentials to version control!
 
-const char* ELEVEN_LABS_API_KEY = "sk_e3793377e47c5f018a4102a24d56da792fcaf5a7a4e7c7a8";
-const char* GEMINI_API_KEY      = "AIzaSyDc4lO_EM2mwSuerCH0e5Q-ugdWrkLXdvc";
-
+// API URLs (public - safe to keep here)
 const char* EL_API_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 const char* GEMINI_TEXT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=";
 const char* GEMINI_IMAGE_URL = "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-pro-image-preview:generateContent?key=";

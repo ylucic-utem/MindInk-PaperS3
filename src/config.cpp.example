@@ -1,0 +1,34 @@
+/*
+ * SECURITY WARNING: Do not commit credentials to version control!
+ * 
+ * SETUP INSTRUCTIONS:
+ * 1. Copy this file: cp src/config.cpp.example src/config.cpp
+ * 2. Edit src/config.cpp and add YOUR credentials
+ * 3. Never commit src/config.cpp to git
+ * 4. config.cpp is in .gitignore by default
+ */
+
+#include "config.h"
+
+// ============================================================================
+// WiFi Configuration
+// ============================================================================
+// Replace with your actual WiFi credentials
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+
+// ============================================================================
+// API Keys
+// ============================================================================
+// Get from https://elevenlabs.io/
+const char* ELEVEN_LABS_API_KEY = "YOUR_ELEVEN_LABS_API_KEY";
+
+// Get from https://aistudio.google.com/
+const char* GEMINI_API_KEY = "YOUR_GEMINI_API_KEY";
+
+// ============================================================================
+// API Endpoints (these are public and safe)
+// ============================================================================
+const char* EL_API_URL = "https://api.elevenlabs.io/v1/speech-to-text";
+const char* GEMINI_TEXT_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=";
+const char* GEMINI_IMAGE_URL = "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3-pro-image-preview:generateContent?key=";
