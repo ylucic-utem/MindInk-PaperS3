@@ -1,0 +1,92 @@
+/*
+ * PAPERS3 Display Test - Minimal Working Example
+ * Based on flipcard-papers3 implementation
+ */
+
+#include <M5Unified.h>
+#include <SD.h>
+#include <SPI.h>
+
+// PAPERS3 SD Card Pins
+#define SD_CS   47
+#define SD_SCK  39
+#define SD_MOSI 38
+#define SD_MISO 40
+
+void setup() {
+    auto cfg = M5.config();
+    cfg.serial_baudrate = 115200;
+    M5.begin(cfg);
+    
+    Serial.begin(115200);
+    delay(500);
+    Serial.println("\n=== PAPERS3 Display Test ===");
+    
+    // Set rotation to portrait mode (critical for PAPERS3!)
+    M5.Display.setRotation(2);
+    
+    // Clear the display
+    M5.Display.clear();
+    
+    Serial.println("[DISPLAY] Display cleared");
+    Serial.printf("[DISPLAY] Width: %d, Height: %d\n", M5.Display.width(), M5.Display.height());
+    
+    // Draw a simple test screen
+    M5.Display.fillScreen(TFT_WHITE);
+    Serial.println("[DISPLAY] Filled with WHITE");
+    
+    // Draw some black text
+    M5.Display.setTextColor(TFT_BLACK);
+    M5.Display.setTextSize(3);
+    M5.Display.setTextDatum(MC_DATUM);
+    M5.Display.drawString("PAPERS3 TEST", M5.Display.width() / 2, M5.Display.height() / 2 - 60);
+    
+    M5.Display.setTextSize(2);
+    M5.Display.drawString("If you see this,", M5.Display.width() / 2, M5.Display.height() / 2);
+    M5.Display.drawString("display is working!", M5.Display.width() / 2, M5.Display.height() / 2 + 40);
+    
+    // Draw a border
+    M5.Display.drawRect(10, 10, M5.Display.width() - 20, M5.Display.height() - 20, TFT_BLACK);
+    M5.Display.drawRect(12, 12, M5.Display.width() - 24, M5.Display.height() - 24, TFT_BLACK);
+    
+    Serial.println("[DISPLAY] Test screen drawn");
+    
+    // Test SD card with PAPERS3 pins
+    Serial.println("\n[SD] Testing SD card...");
+    SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+    delay(300);
+    
+    if (SD.begin(SD_CS, SPI, 10000000)) {
+        Serial.println("[SD] SD Card initialized successfully!");
+        Serial.printf("[SD] Card Size: %llu MB\n", SD.cardSize() / (1024 * 1024));
+        Serial.printf("[SD] Total: %llu MB\n", SD.totalBytes() / (1024 * 1024));
+        Serial.printf("[SD] Used: %llu MB\n", SD.usedBytes() / (1024 * 1024));
+        
+        M5.Display.setTextSize(1);
+        M5.Display.drawString("SD Card: OK", M5.Display.width() / 2, M5.Display.height() - 60);
+    } else {
+        Serial.println("[SD] SD Card failed!");
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(TFT_RED);
+        M5.Display.drawString("SD Card: FAILED", M5.Display.width() / 2, M5.Display.height() - 60);
+    }
+}
+
+void loop() {
+    M5.update();
+    
+    // Check for touch
+    if (M5.Touch.getCount()) {
+        auto t = M5.Touch.getDetail();
+        if (t.wasPressed()) {
+            Serial.printf("Touch at (%d, %d)\n", t.x, t.y);
+            
+            // Flash a small circle at touch point
+            M5.Display.fillCircle(t.x, t.y, 20, TFT_BLACK);
+            delay(200);
+            M5.Display.fillCircle(t.x, t.y, 20, TFT_WHITE);
+        }
+    }
+    
+    delay(50);
+}
