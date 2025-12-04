@@ -2,7 +2,7 @@
 #define STORAGE_H
 
 #include <vector>
-#include <String.h>
+#include <WString.h>
 
 // ============================================================================
 // DATA STRUCTURES
@@ -23,22 +23,23 @@ struct StorageInfo {
 
 struct AudioFile {
     String filename;
-    String dateTime;
-    StorageType storage;
+    uint32_t fileSize = 0;
+    uint32_t duration = 0;  // milliseconds
+    uint32_t sampleRate = 0;
+    uint16_t bitDepth = 0;
+    uint32_t timestamp = 0;
 };
 
 struct SummaryFile {
     String filename;
     String relatedAudioFilename;
-    String dateTime;
-    StorageType storage;
+    uint32_t duration = 0;
 };
 
 struct ImageFile {
-    String originalFilename;
+    String filename;
     String summaryFilename;
-    String dateTime;
-    StorageType storage;
+    uint32_t timestamp = 0;
 };
 
 // ============================================================================

@@ -3,7 +3,7 @@
 
 #include <cstdint>
 #include <vector>
-#include <String.h>
+#include <WString.h>
 #include <M5Unified.h>
 #include "storage.h"
 
@@ -54,6 +54,7 @@ extern size_t recordingByteCount;
 
 /// Initialize audio system using M5Unified microphone
 /// Configures I2S microphone with PDM mode for PaperS3
+/// Note: Microphone and speaker cannot be used simultaneously
 void initAudio();
 
 /// Start recording audio from microphone to internal buffer
@@ -78,6 +79,50 @@ bool isAudioRecording();
 /// @param durationMs Recording duration in milliseconds
 /// @return true if recording completed successfully
 bool recordAudioToFile(const String& filename, uint32_t durationMs);
+
+/// Update audio recording loop (call in main loop to collect microphone samples)
+/// This must be called frequently to collect buffered audio data
+void updateAudioRecording();
+
+// ============================================================================
+// AUDIO PLAYBACK (SPEAKER) FUNCTIONS
+// ============================================================================
+
+/// Initialize speaker for audio playback
+/// Must be called before any playback operations
+bool initSpeaker();
+
+/// Stop speaker and release resources
+void stopSpeaker();
+
+/// Play audio data from memory
+/// @param data Audio data buffer (int16_t PCM samples)
+/// @param samples Number of samples to play
+/// @param sampleRate Sample rate in Hz (e.g., 16000)
+/// @param stereo true for stereo, false for mono
+/// @return true if playback started successfully
+bool playAudioData(const int16_t* data, size_t samples, uint32_t sampleRate, bool stereo = false);
+
+/// Start non-blocking playback of a WAV file
+bool startAudioPlayback(const String& filename);
+
+/// Update playback loop (call in main loop)
+void updateAudioPlayback();
+
+/// Pause playback
+void pauseAudioPlayback();
+
+/// Resume playback
+void resumeAudioPlayback();
+
+/// Stop playback immediately
+void stopPlayback();
+
+/// Check if speaker is currently playing audio
+bool isAudioPlaying();
+
+/// Set speaker volume (0-255)
+void setAudioVolume(uint8_t volume);
 
 // ============================================================================
 // AUDIO FILE MANAGEMENT

@@ -1,7 +1,7 @@
 #ifndef API_H
 #define API_H
 
-#include <String.h>
+#include <WString.h>
 
 // ============================================================================
 // API CONFIGURATION
@@ -66,8 +66,7 @@ InfographicResult generateInfographic(const String& summaryText, const String& s
 // UTILITY FUNCTIONS
 // ============================================================================
 
-/// Check if WiFi is connected
-bool isWiFiConnected();
+
 
 /// Get HTTP response code description
 String getHttpCodeDescription(int code);

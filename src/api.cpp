@@ -10,9 +10,7 @@
 // HELPER FUNCTIONS
 // ============================================================================
 
-bool isWiFiConnected() {
-    return WiFi.status() == WL_CONNECTED;
-}
+#include "wifi_manager.h"
 
 String getHttpCodeDescription(int code) {
     switch (code) {
