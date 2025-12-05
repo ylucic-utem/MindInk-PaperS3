@@ -27,6 +27,7 @@
 #include "audio.h"
 #include "api.h"
 #include "wifi_manager.h"
+#include "supabase_client.h"
 
 // ============================================================================
 // GLOBAL STATE
@@ -129,8 +130,12 @@ void loop() {
                 else if (checkButtonPress(tx, ty, menuButtons[1])) { // AUDIO FILES
                     currentState = STATE_LIST_AUDIO;
                     std::vector<String> list;
-                    getRecentAudioFiles(recentAudio, 10);
-                    for(auto a : recentAudio) list.push_back(a.filename);
+                    if (isWiFiConnected() && fetchSupabaseAudio(recentAudio)) {
+                        for (auto a : recentAudio) list.push_back(a.filename);
+                    } else {
+                        getRecentAudioFiles(recentAudio, 10);
+                        for(auto a : recentAudio) list.push_back(a.filename);
+                    }
                     drawList("Audio Files", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
                 else if (checkButtonPress(tx, ty, menuButtons[2])) { // SUMMARIES
@@ -237,6 +242,15 @@ void loop() {
                 for (size_t i = 0; i < recentAudio.size(); i++) {
                     if (ty >= y && ty <= y + 50) {
                         currentPlaybackFile = recentAudio[i];
+                        // Download from Supabase if needed
+                        String localPath = currentPlaybackFile.filename;
+                        if (isWiFiConnected() && !currentPlaybackFile.id.isEmpty()) {
+                            if (!SD.exists(localPath)) {
+                                if (downloadAudioFromSupabase(currentPlaybackFile, localPath)) {
+                                    currentPlaybackFile.filename = localPath;
+                                }
+                            }
+                        }
                         currentState = STATE_AUDIO_PLAYER;
                         drawAudioPlayer(currentPlaybackFile.filename, false, false);
                         break;

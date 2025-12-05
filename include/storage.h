@@ -28,6 +28,11 @@ struct AudioFile {
     uint32_t sampleRate = 0;
     uint16_t bitDepth = 0;
     uint32_t timestamp = 0;
+    // Cloud metadata (Supabase)
+    String id;             // audio_records.id
+    String storagePath;    // storage_path in bucket
+    String summaryId;      // summaries.id linked
+    String status;         // status column if present
 };
 
 struct SummaryFile {

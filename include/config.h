@@ -12,6 +12,9 @@ extern const char* WIFI_PASS;
 // ============================================================================
 extern const char* ELEVEN_LABS_API_KEY;
 extern const char* GEMINI_API_KEY;
+extern const char* SUPABASE_URL;
+extern const char* SUPABASE_ANON_KEY;
+extern const char* SUPABASE_EDGE_TOKEN;
 
 // ============================================================================
 // API ENDPOINTS
