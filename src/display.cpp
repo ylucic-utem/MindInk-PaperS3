@@ -9,6 +9,146 @@
 std::vector<Button> menuButtons;
 AppState currentState = STATE_MENU;
 String currentTextContent = "";
+EbookReader ebookReader;
+
+// ============================================================================
+// EBOOK READER IMPLEMENTATION
+// ============================================================================
+
+void EbookReader::setText(const String& text) {
+    fullText = text;
+    currentPage = 0;
+    pages.clear();
+    paginateText();
+}
+
+void EbookReader::paginateText() {
+    pages.clear();
+    if (fullText.length() == 0) {
+        totalPages = 0;
+        return;
+    }
+    
+    String remaining = fullText;
+    remaining.trim();
+    
+    while (remaining.length() > 0) {
+        String pageText = "";
+        int lineCount = 0;
+        
+        // Build page line by line
+        while (lineCount < linesPerPage && remaining.length() > 0) {
+            String line = "";
+            
+            // Word wrapping: take words until we reach charsPerLine
+            while (remaining.length() > 0 && line.length() < charsPerLine) {
+                // Find next space or newline
+                int spaceIdx = remaining.indexOf(' ');
+                int newlineIdx = remaining.indexOf('\n');
+                
+                // Handle explicit newline
+                if (newlineIdx >= 0 && (newlineIdx < spaceIdx || spaceIdx < 0)) {
+                    String word = remaining.substring(0, newlineIdx);
+                    if (line.length() + word.length() <= charsPerLine) {
+                        if (line.length() > 0) line += " ";
+                        line += word;
+                        remaining = remaining.substring(newlineIdx + 1);
+                        break; // Force new line
+                    } else if (line.length() == 0) {
+                        // Word too long for line, take what fits
+                        line = word.substring(0, charsPerLine);
+                        remaining = word.substring(charsPerLine) + remaining.substring(newlineIdx);
+                    }
+                    break;
+                }
+                
+                // Handle space-separated word
+                if (spaceIdx >= 0) {
+                    String word = remaining.substring(0, spaceIdx);
+                    if (line.length() == 0) {
+                        // First word on line
+                        if (word.length() <= charsPerLine) {
+                            line = word;
+                            remaining = remaining.substring(spaceIdx + 1);
+                        } else {
+                            // Single word too long, break it
+                            line = word.substring(0, charsPerLine);
+                            remaining = word.substring(charsPerLine) + remaining.substring(spaceIdx);
+                            break;
+                        }
+                    } else {
+                        // Not first word
+                        if (line.length() + 1 + word.length() <= charsPerLine) {
+                            line += " " + word;
+                            remaining = remaining.substring(spaceIdx + 1);
+                        } else {
+                            break; // Word doesn't fit, move to next line
+                        }
+                    }
+                } else {
+                    // Last word in text
+                    if (line.length() == 0) {
+                        if (remaining.length() <= charsPerLine) {
+                            line = remaining;
+                            remaining = "";
+                        } else {
+                            line = remaining.substring(0, charsPerLine);
+                            remaining = remaining.substring(charsPerLine);
+                        }
+                    } else {
+                        if (line.length() + 1 + remaining.length() <= charsPerLine) {
+                            line += " " + remaining;
+                            remaining = "";
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (line.length() > 0) {
+                if (pageText.length() > 0) pageText += "\n";
+                pageText += line;
+                lineCount++;
+            }
+            
+            remaining.trim();
+        }
+        
+        if (pageText.length() > 0) {
+            pages.push_back(pageText);
+        }
+    }
+    
+    totalPages = pages.size();
+}
+
+void EbookReader::nextPage() {
+    if (currentPage < totalPages - 1) {
+        currentPage++;
+    }
+}
+
+void EbookReader::prevPage() {
+    if (currentPage > 0) {
+        currentPage--;
+    }
+}
+
+bool EbookReader::hasNextPage() {
+    return currentPage < totalPages - 1;
+}
+
+bool EbookReader::hasPrevPage() {
+    return currentPage > 0;
+}
+
+String EbookReader::getCurrentPageText() {
+    if (currentPage >= 0 && currentPage < pages.size()) {
+        return pages[currentPage];
+    }
+    return "";
+}
 
 // ============================================================================
 // UI SETUP
@@ -16,18 +156,15 @@ String currentTextContent = "";
 
 void setupButtons() {
     menuButtons.clear();
-    Button btn1 = {50, 100, 200, 80, "RECORD"};
+    // New 4-button layout for Cloud Remote & Viewer
+    Button btn1 = {50, 100, 200, 80, "AUDIO FILES"};      // Remote Trigger
     menuButtons.push_back(btn1);
-    Button btn2 = {50, 220, 200, 80, "AUDIO FILES"};
+    Button btn2 = {300, 100, 200, 80, "SUMMARIES"};       // View Text
     menuButtons.push_back(btn2);
-    Button btn3 = {300, 100, 200, 80, "SUMMARIES"};
+    Button btn3 = {50, 220, 200, 80, "GALLERY"};          // View Images
     menuButtons.push_back(btn3);
-    Button btn4 = {300, 220, 200, 80, "GALLERY"};
+    Button btn4 = {300, 220, 200, 80, "POWER"};           // Power Options
     menuButtons.push_back(btn4);
-    Button btn5 = {50, 340, 200, 80, "DEEP SLEEP"};
-    menuButtons.push_back(btn5);
-    Button btn6 = {300, 340, 200, 80, "POWER OFF"};
-    menuButtons.push_back(btn6);
 }
 
 bool checkButtonPress(int x, int y, const Button& btn) {
@@ -243,102 +380,164 @@ void drawControlBtn(int x, int y, int w, int h, const char* label, bool active =
     M5.Display.drawCenterString(label, x + w/2, y + h/2 - 5);
 }
 
-void drawRecordingPage(bool isRecording, bool isPaused, bool hasRecordedData) {
-    M5.Display.fillScreen(TFT_WHITE);
-    displayStatusBar();
-    
-    // Title
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("RECORDING STUDIO", M5.Display.width()/2, 50);
-    
-    int btnW = 120;
-    int btnH = 60;
-    int centerX = M5.Display.width()/2;
-    int centerY = M5.Display.height()/2;
-    
-    if (isRecording) {
-        // Recording in progress
-        M5.Display.setTextSize(1);
-        M5.Display.drawCenterString("Recording...", centerX, 90);
-        M5.Display.fillCircle(centerX - 60, 90, 6, TFT_RED);
-        
-        // PAUSE (Left)
-        drawControlBtn(centerX - btnW - 10, centerY, btnW, btnH, "PAUSE");
-        
-        // STOP (Right)
-        drawControlBtn(centerX + 10, centerY, btnW, btnH, "STOP");
-        
-    } else if (hasRecordedData) {
-        // Recording finished, waiting for action
-        M5.Display.setTextSize(1);
-        M5.Display.drawCenterString("Recording Complete", centerX, 90);
-        
-        // TRANSCRIBE (Left)
-        drawControlBtn(centerX - btnW - 10, centerY, btnW, btnH, "TRANSCRIBE");
-        
-        // DISCARD (Right)
-        drawControlBtn(centerX + 10, centerY, btnW, btnH, "DISCARD");
-        
-    } else {
-        // Ready to record
-        M5.Display.setTextSize(1);
-        M5.Display.drawCenterString("Ready", centerX, 90);
-        
-        // START RECORDING (Center)
-        drawControlBtn(centerX - btnW/2, centerY, btnW, btnH, "START REC");
-        
-        // BACK (Bottom)
-        drawControlBtn(20, M5.Display.height() - 50, 80, 40, "BACK");
-    }
-}
+// ============================================================================
+// MESSAGE DISPLAY (for confirmation dialogs)
+// ============================================================================
 
-void drawAudioPlayer(String filename, bool isPlaying, bool isPaused) {
+void drawMessage(const String& title, const String& msg) {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
     // Title
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
     M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("AUDIO PLAYER", M5.Display.width()/2, 40);
+    M5.Display.drawCenterString(title, M5.Display.width()/2, 80);
     
-    // Filename
+    // Message body
     M5.Display.setTextSize(1);
-    M5.Display.drawCenterString(filename, M5.Display.width()/2, 80);
-    
-    // Status
-    String status = isPlaying ? (isPaused ? "Paused" : "Playing...") : "Stopped";
     M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
-    M5.Display.drawCenterString(status, M5.Display.width()/2, 110);
     
+    // Word wrap the message across multiple lines
+    int lineY = 150;
+    int maxWidth = M5.Display.width() - 40;
+    String remaining = msg;
+    
+    while (remaining.length() > 0 && lineY < M5.Display.height() - 80) {
+        String line = "";
+        int charIdx = 0;
+        
+        // Build line that fits within maxWidth
+        while (charIdx < remaining.length()) {
+            String testLine = line + remaining.charAt(charIdx);
+            if (M5.Display.textWidth(testLine) > maxWidth) {
+                break;
+            }
+            line = testLine;
+            charIdx++;
+        }
+        
+        if (line.length() == 0 && remaining.length() > 0) {
+            // Single word too long, just take characters that fit
+            line = remaining.substring(0, 1);
+            charIdx = 1;
+        }
+        
+        M5.Display.drawCenterString(line, M5.Display.width()/2, lineY);
+        remaining = remaining.substring(charIdx);
+        remaining.trim();
+        lineY += 25;
+    }
+    
+    // OK button to dismiss
     int btnW = 100;
-    int btnH = 50;
-    int startX = (M5.Display.width() - (3 * btnW + 40)) / 2;
-    int y = 160;
-    
-    // PLAY
-    drawControlBtn(startX, y, btnW, btnH, "PLAY", isPlaying && !isPaused);
-    
-    // PAUSE
-    drawControlBtn(startX + btnW + 20, y, btnW, btnH, "PAUSE", isPaused);
-    
-    // STOP
-    drawControlBtn(startX + 2 * (btnW + 20), y, btnW, btnH, "STOP", !isPlaying);
-
-    // MAKE SUMMARY
-    int summaryW = 180;
-    int summaryH = 50;
-    int summaryX = (M5.Display.width() - summaryW) / 2;
-    int summaryY = y + 80;
-    drawControlBtn(summaryX, summaryY, summaryW, summaryH, "MAKE SUMMARY");
-    
-    // BACK
-    drawControlBtn(20, M5.Display.height() - 50, 80, 40, "BACK");
+    int btnH = 40;
+    int btnX = (M5.Display.width() - btnW) / 2;
+    int btnY = M5.Display.height() - 60;
+    M5.Display.fillRect(btnX, btnY, btnW, btnH, TFT_LIGHTGREY);
+    M5.Display.drawRect(btnX, btnY, btnW, btnH, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("OK", btnX + btnW/2, btnY + btnH/2 - 5);
 }
+
+// ============================================================================
+// POWER OFF SCREEN
+// ============================================================================
 
 void drawPowerOffScreen() {
     M5.Display.fillScreen(TFT_WHITE);
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
     M5.Display.setTextSize(4);
     M5.Display.drawCenterString("MindInk", M5.Display.width()/2, M5.Display.height()/2 - 20);
+}
+
+// ============================================================================
+// EBOOK READER VIEW
+// ============================================================================
+
+void drawEbookPage() {
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    
+    // Title bar
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("Summary", 20, 40);
+    
+    // Page indicator
+    String pageInfo = "Page " + String(ebookReader.currentPage + 1) + " / " + String(ebookReader.totalPages);
+    M5.Display.drawRightString(pageInfo, M5.Display.width() - 20, 40);
+    
+    // Draw horizontal line separator
+    M5.Display.drawLine(20, 60, M5.Display.width() - 20, 60, TFT_BLACK);
+    
+    // Text content area (monospace font for consistent wrapping)
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::Font0); // Use default monospace font
+    M5.Display.setCursor(20, 75);
+    
+    String pageText = ebookReader.getCurrentPageText();
+    M5.Display.print(pageText);
+    
+    // Navigation buttons at bottom
+    int btnY = M5.Display.height() - 60;
+    int btnH = 45;
+    int btnW = 100;
+    int centerBtnW = 100;
+    
+    // Previous button (left)
+    if (ebookReader.hasPrevPage()) {
+        M5.Display.fillRect(20, btnY, btnW, btnH, TFT_LIGHTGREY);
+        M5.Display.drawRect(20, btnY, btnW, btnH, TFT_BLACK);
+        M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        M5.Display.drawCenterString("< PREV", 20 + btnW/2, btnY + btnH/2 - 5);
+    }
+    
+    // Back button (center)
+    int backBtnX = (M5.Display.width() - centerBtnW) / 2;
+    M5.Display.fillRect(backBtnX, btnY, centerBtnW, btnH, TFT_DARKGREY);
+    M5.Display.drawRect(backBtnX, btnY, centerBtnW, btnH, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREY);
+    M5.Display.drawCenterString("BACK", backBtnX + centerBtnW/2, btnY + btnH/2 - 5);
+    
+    // Next button (right)
+    if (ebookReader.hasNextPage()) {
+        int nextBtnX = M5.Display.width() - 20 - btnW;
+        M5.Display.fillRect(nextBtnX, btnY, btnW, btnH, TFT_LIGHTGREY);
+        M5.Display.drawRect(nextBtnX, btnY, btnW, btnH, TFT_BLACK);
+        M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        M5.Display.drawCenterString("NEXT >", nextBtnX + btnW/2, btnY + btnH/2 - 5);
+    }
+    
+    M5.Display.endWrite();
+}
+
+bool handleEbookTouch(int x, int y) {
+    int btnY = M5.Display.height() - 60;
+    int btnH = 45;
+    int btnW = 100;
+    int centerBtnW = 100;
+    
+    // Check Previous button
+    if (ebookReader.hasPrevPage() && x >= 20 && x <= 20 + btnW && y >= btnY && y <= btnY + btnH) {
+        ebookReader.prevPage();
+        drawEbookPage();
+        return true;
+    }
+    
+    // Check Back button
+    int backBtnX = (M5.Display.width() - centerBtnW) / 2;
+    if (x >= backBtnX && x <= backBtnX + centerBtnW && y >= btnY && y <= btnY + btnH) {
+        return false; // Signal to exit ebook view
+    }
+    
+    // Check Next button
+    int nextBtnX = M5.Display.width() - 20 - btnW;
+    if (ebookReader.hasNextPage() && x >= nextBtnX && x <= nextBtnX + btnW && y >= btnY && y <= btnY + btnH) {
+        ebookReader.nextPage();
+        drawEbookPage();
+        return true;
+    }
+    
+    return true; // Stay in ebook view
 }

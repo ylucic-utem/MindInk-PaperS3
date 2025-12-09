@@ -1,15 +1,17 @@
 /*
- * Project: MindInk - M5 Paper S3 Portable Note & Infographic Companion
+ * Project: MindInk - M5 Paper S3 Cloud Remote & Viewer
  * Author: Enhanced by AI Assistant
- * Date: 2025-12-04
+ * Date: 2025-12-09
  *
- * Refactored version with modular architecture
+ * Cloud-focused architecture: No local audio processing
+ * Device acts as a remote trigger for Supabase Edge Functions
+ * and a viewer for summaries and infographics.
  *
  * Capabilities:
- * - Audio Recording (Mic -> SD/PSRAM .wav)
- * - Transcription (Eleven Labs API)
- * - Summarization (Gemini 1.5 Flash API)
- * - Infographic Generation (Gemini 3 Pro Image Preview API)
+ * - List audio files from Supabase
+ * - Trigger cloud processing via Edge Function
+ * - View summaries from Supabase
+ * - View infographics from Supabase
  *
  * Dependencies:
  * - M5Unified
@@ -21,15 +23,12 @@
 #include <WiFiClientSecure.h>
 #include <SD.h>
 
-// Include all modular headers
+// Include modular headers (no audio or local_processing)
 #include "config.h"
 #include "storage.h"
 #include "display.h"
-#include "audio.h"
-#include "api.h"
 #include "wifi_manager.h"
 #include "supabase_client.h"
-#include "local_processing.h"
 
 // ============================================================================
 // GLOBAL STATE
@@ -38,14 +37,10 @@ std::vector<AudioFile> recentAudio;
 std::vector<SummaryFile> recentSummaries;
 std::vector<ImageFile> recentImages;
 
-// Recording State
-uint32_t recordingStartTime = 0;
-bool isRecordingPaused = false;
-bool hasRecordedData = false;
-AudioFile lastRecordedFile;
-
-// Playback State
-AudioFile currentPlaybackFile;
+// Selection indices for list navigation
+int selectedAudioIndex = -1;
+int selectedSummaryIndex = -1;
+int selectedImageIndex = -1;
 
 // ============================================================================
 // SETUP
@@ -56,21 +51,15 @@ void setup() {
     cfg.serial_baudrate = 115200;
     M5.begin(cfg);
     
-    Serial.println("\n\n=== MindInk - M5 Paper S3 (Refactored) ===");
+    Serial.println("\n\n=== MindInk - M5 Paper S3 (Cloud Remote & Viewer) ===");
     
     M5.Display.setRotation(2);
     M5.Display.clear();
     delay(300);
     Serial.println("[DISPLAY] PAPERS3 display initialized");
 
-    // Initialize storage systems
+    // Initialize storage systems (for caching)
     initStorage();
-    
-    // Initialize audio system
-    initAudio();
-    
-    // Initialize local processing (transcription/summarization workflow)
-    initLocalProcessing();
     
     // Initialize WiFi
     initWiFi();
@@ -79,8 +68,50 @@ void setup() {
     setupButtons();
     drawMenu();
     
-    Serial.println("[SETUP] Complete");
+    Serial.println("[SETUP] Complete - Cloud Remote & Viewer Mode");
     Serial.printf("[MEMORY] Free Heap: %d bytes\n", ESP.getFreeHeap());
+}
+
+// ============================================================================
+// HELPER: Draw Audio List with Status Icons
+// ============================================================================
+void drawAudioListWithStatus() {
+    std::vector<String> list;
+    for (const auto& a : recentAudio) {
+        String item = a.filename;
+        if (a.status.length() > 0) {
+            item += " [" + a.status + "]";
+        }
+        list.push_back(item);
+    }
+    drawList("Audio Files (Tap to Process)", list.empty() ? std::vector<String>{"(No audio files found)"} : list);
+}
+
+// ============================================================================
+// HELPER: Draw Summaries List
+// ============================================================================
+void drawSummariesList() {
+    std::vector<String> list;
+    for (const auto& s : recentSummaries) {
+        String item = s.filename;
+        if (s.status.length() > 0) {
+            item += " (" + s.status + ")";
+        }
+        list.push_back(item);
+    }
+    drawList("Summaries", list.empty() ? std::vector<String>{"(No summaries found)"} : list);
+}
+
+// ============================================================================
+// HELPER: Draw Gallery List
+// ============================================================================
+void drawGalleryList() {
+    std::vector<String> list;
+    for (const auto& img : recentImages) {
+        String item = img.filename.length() > 0 ? img.filename : "(image)";
+        list.push_back(item);
+    }
+    drawList("Gallery", list.empty() ? std::vector<String>{"(No images found)"} : list);
 }
 
 // ============================================================================
@@ -90,319 +121,225 @@ void setup() {
 void loop() {
     M5.update();
     
-    // Continuously collect audio samples during recording
-    updateAudioRecording();
-    
-    // Update audio playback if active
-    updateAudioPlayback();
-    
-    // Update recording screen timer if recording (only every 1 second)
-    if (currentState == STATE_RECORDING && isRecording && !isRecordingPaused) {
-        static uint32_t lastScreenUpdate = 0;
-        if (millis() - lastScreenUpdate > 1000) {
-            // We can refresh the screen or just the timer, but for now full refresh is safe enough on EPD? 
-            // Wait, PaperS3 is EPD? No, PaperS3 usually implies E-Ink, but M5PaperS3 might be LCD?
-            // The code uses M5.Display.fillScreen(TFT_WHITE), so it treats it like LCD or fast EPD.
-            // If it's E-Ink, we should avoid full refresh. Assuming LCD for now based on previous code.
-            // Actually, M5Paper is E-Ink. M5CoreS3 is LCD. "PaperS3" is likely M5Paper (ESP32) or a new S3 version?
-            // The user said "PaperS3". If it's E-Ink, frequent updates are bad.
-            // But the previous code did it. I'll stick to the pattern.
-            
-            drawRecordingPage(true, false, false); // Redraw to show animation/time? 
-            // Actually drawRecordingPage doesn't show time yet. I should add it back if needed.
-            // For now, let's just keep it static to avoid flicker if it is E-Ink.
-            lastScreenUpdate = millis();
-        }
-    }
+    int w = M5.Display.width();
+    int h = M5.Display.height();
     
     if (M5.Touch.getCount() > 0) {
         auto t = M5.Touch.getDetail(0);
         if (t.wasPressed()) {
             int tx = t.x;
             int ty = t.y;
-            int w = M5.Display.width();
-            int h = M5.Display.height();
-            int centerX = w / 2;
-            int centerY = h / 2;
             
+            // ================================================================
+            // STATE: MENU
+            // ================================================================
             if (currentState == STATE_MENU) {
-                if (checkButtonPress(tx, ty, menuButtons[0])) { // RECORD
-                    currentState = STATE_RECORDING;
-                    isRecordingPaused = false;
-                    hasRecordedData = false;
-                    drawRecordingPage(false, false, false);
-                }
-                else if (checkButtonPress(tx, ty, menuButtons[1])) { // AUDIO FILES
+                // Button 0: AUDIO FILES (Remote Trigger)
+                if (checkButtonPress(tx, ty, menuButtons[0])) {
                     currentState = STATE_LIST_AUDIO;
-                    std::vector<String> list;
+                    drawProcessing("Fetching audio files...");
+                    
                     if (isWiFiConnected() && fetchSupabaseAudio(recentAudio)) {
-                        for (auto a : recentAudio) list.push_back(a.filename);
+                        drawAudioListWithStatus();
                     } else {
-                        getRecentAudioFiles(recentAudio, 10);
-                        for(auto a : recentAudio) list.push_back(a.filename);
+                        drawError("Failed to fetch audio files. Check WiFi connection.");
+                        currentState = STATE_ERROR;
                     }
-                    drawList("Audio Files", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
-                else if (checkButtonPress(tx, ty, menuButtons[2])) { // SUMMARIES
+                // Button 1: SUMMARIES (View Text)
+                else if (checkButtonPress(tx, ty, menuButtons[1])) {
                     currentState = STATE_LIST_SUMMARIES;
-                    std::vector<String> list;
-                    recentSummaries.clear();
+                    drawProcessing("Fetching summaries...");
+                    
                     if (isWiFiConnected() && fetchSupabaseSummaries(recentSummaries)) {
-                        for (auto s : recentSummaries) list.push_back(s.filename + (s.status.length() ? " (" + s.status + ")" : ""));
+                        drawSummariesList();
                     } else {
-                        for(auto s : recentSummaries) list.push_back(s.filename);
+                        drawError("Failed to fetch summaries. Check WiFi connection.");
+                        currentState = STATE_ERROR;
                     }
-                    drawList("Summaries", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
-                else if (checkButtonPress(tx, ty, menuButtons[3])) { // GALLERY
+                // Button 2: GALLERY (View Images)
+                else if (checkButtonPress(tx, ty, menuButtons[2])) {
                     currentState = STATE_GALLERY;
-                    recentImages.clear();
-                    std::vector<String> list;
+                    drawProcessing("Fetching images...");
+                    
                     if (isWiFiConnected() && fetchSupabaseImages(recentImages)) {
-                        for (auto img : recentImages) list.push_back(img.filename.length() ? img.filename : String("(image)"));
+                        drawGalleryList();
                     } else {
-                        for (auto img : recentImages) list.push_back(img.filename);
+                        drawError("Failed to fetch images. Check WiFi connection.");
+                        currentState = STATE_ERROR;
                     }
-                    drawList("Gallery", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
-                else if (checkButtonPress(tx, ty, menuButtons[4])) { // DEEP SLEEP
-                    drawPowerOffScreen();
-                    delay(1000);
-                    M5.Power.deepSleep();
-                }
-                else if (checkButtonPress(tx, ty, menuButtons[5])) { // POWER OFF
+                // Button 3: POWER
+                else if (checkButtonPress(tx, ty, menuButtons[3])) {
                     drawPowerOffScreen();
                     delay(1000);
                     M5.Power.powerOff();
                 }
             }
-            else if (currentState == STATE_RECORDING) {
-                int btnW = 120;
-                int btnH = 60;
-                
-                if (isRecording) {
-                    // PAUSE (Left: centerX - btnW - 10)
-                    if (tx >= centerX - btnW - 10 && tx <= centerX - 10 && ty >= centerY && ty <= centerY + btnH) {
-                        // Pause not fully implemented in audio.cpp for recording, so we'll just ignore or stop?
-                        // User asked for pause.
-                        // For now, let's treat as Stop to be safe, or implement pause later.
-                        Serial.println("[UI] Pause Recording (Not Implemented)");
-                    }
-                    // STOP (Right: centerX + 10)
-                    else if (tx >= centerX + 10 && tx <= centerX + 10 + btnW && ty >= centerY && ty <= centerY + btnH) {
-                        if (stopAudioRecording(lastRecordedFile)) {
-                            hasRecordedData = true;
-                            recentAudio.push_back(lastRecordedFile);
-                            drawRecordingPage(false, false, true);
-                        }
-                    }
-                } else if (hasRecordedData) {
-                    // TRANSCRIBE (Left)
-                    if (tx >= centerX - btnW - 10 && tx <= centerX - 10 && ty >= centerY && ty <= centerY + btnH) {
-                        if (isWiFiConnected()) {
-                            currentState = STATE_PROCESSING;
-                            drawProcessing("Transcribing...");
-                            
-                            TranscriptionResult transcResult = transcribeAudio(lastRecordedFile.filename);
-                            
-                            if (transcResult.success) {
-                                currentTextContent = transcResult.text;
-                                drawProcessing("Summarizing...");
-                                SummaryResult summResult = summarizeText(currentTextContent);
-                                
-                                if (summResult.success) {
-                                    currentTextContent = summResult.text;
-                                    SummaryFile summFile;
-                                    summFile.filename = "summary_" + lastRecordedFile.filename;
-                                    summFile.relatedAudioFilename = lastRecordedFile.filename;
-                                    summFile.duration = lastRecordedFile.duration;
-                                    recentSummaries.push_back(summFile);
-                                    
-                                    currentState = STATE_VIEW_SUMMARY;
-                                    drawTextView(currentTextContent);
-                                } else {
-                                    drawError("Summarization failed");
-                                    currentState = STATE_ERROR;
-                                }
-                            } else {
-                                drawError("Transcription failed");
-                                currentState = STATE_ERROR;
-                            }
-                        } else {
-                            drawError("WiFi not connected");
-                            currentState = STATE_ERROR;
-                        }
-                    }
-                    // DISCARD (Right)
-                    else if (tx >= centerX + 10 && tx <= centerX + 10 + btnW && ty >= centerY && ty <= centerY + btnH) {
-                        hasRecordedData = false;
-                        drawRecordingPage(false, false, false);
-                    }
-                } else {
-                    // START (Center)
-                    if (tx >= centerX - btnW/2 && tx <= centerX + btnW/2 && ty >= centerY && ty <= centerY + btnH) {
-                        if (startAudioRecording()) {
-                            recordingStartTime = millis();
-                            drawRecordingPage(true, false, false);
-                        }
-                    }
-                    // BACK (Bottom Left)
-                    else if (tx >= 20 && tx <= 100 && ty >= h - 50) {
-                        currentState = STATE_MENU;
-                        drawMenu();
-                    }
-                }
-            }
+            
+            // ================================================================
+            // STATE: LIST AUDIO (Remote Trigger)
+            // ================================================================
             else if (currentState == STATE_LIST_AUDIO) {
                 // Check list items
                 int y = 100;
+                bool itemSelected = false;
+                
                 for (size_t i = 0; i < recentAudio.size(); i++) {
-                    if (ty >= y && ty <= y + 50) {
-                        currentPlaybackFile = recentAudio[i];
-                        currentState = STATE_AUDIO_PLAYER;
-                        drawAudioPlayer(currentPlaybackFile.filename, false, false);
+                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                        itemSelected = true;
+                        
+                        // Trigger cloud processing for this audio file
+                        AudioFile& selected = recentAudio[i];
+                        
+                        if (selected.id.isEmpty()) {
+                            drawError("Invalid audio file ID");
+                            currentState = STATE_ERROR;
+                        } else {
+                            drawProcessing("Triggering cloud processing...");
+                            
+                            if (triggerProcessAudio(selected.id)) {
+                                drawMessage("Processing Triggered!", 
+                                    "Cloud processing has started for: " + selected.filename + ". Check back later for results.");
+                                // Stay in a temporary state to show message, then return to menu on tap
+                                currentState = STATE_PROCESSING;
+                            } else {
+                                drawError("Failed to trigger processing. Please try again.");
+                                currentState = STATE_ERROR;
+                            }
+                        }
                         break;
                     }
                     y += 60;
                 }
+                
                 // Back button
-                if (ty > h - 60 && tx < 120) {
+                if (!itemSelected && ty > h - 60 && tx < 120) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
             }
-            else if (currentState == STATE_AUDIO_PLAYER) {
+            
+            // ================================================================
+            // STATE: PROCESSING (Message display - just waiting for OK)
+            // ================================================================
+            else if (currentState == STATE_PROCESSING) {
+                // Any tap returns to menu
                 int btnW = 100;
-                int btnH = 50;
-                int startX = (w - (3 * btnW + 40)) / 2;
-                int y = 160;
-                int summaryW = 180;
-                int summaryH = 50;
-                int summaryX = (w - summaryW) / 2;
-                int summaryY = y + 80;
+                int btnH = 40;
+                int btnX = (w - btnW) / 2;
+                int btnY = h - 60;
                 
-                // PLAY
-                if (tx >= startX && tx <= startX + btnW && ty >= y && ty <= y + btnH) {
-                    if (isAudioPlaying()) {
-                        resumeAudioPlayback();
-                    } else {
-                        startAudioPlayback(currentPlaybackFile.filename);
-                    }
-                    drawAudioPlayer(currentPlaybackFile.filename, true, false);
-                }
-                // PAUSE
-                else if (tx >= startX + btnW + 20 && tx <= startX + 2*btnW + 20 && ty >= y && ty <= y + btnH) {
-                    pauseAudioPlayback();
-                    drawAudioPlayer(currentPlaybackFile.filename, true, true);
-                }
-                // STOP
-                else if (tx >= startX + 2*(btnW + 20) && tx <= startX + 3*btnW + 40 && ty >= y && ty <= y + btnH) {
-                    stopPlayback();
-                    drawAudioPlayer(currentPlaybackFile.filename, false, false);
-                }
-                // MAKE SUMMARY
-                else if (tx >= summaryX && tx <= summaryX + summaryW && ty >= summaryY && ty <= summaryY + summaryH) {
-                    if (!isWiFiConnected()) {
-                        drawError("WiFi not connected");
-                        currentState = STATE_ERROR;
-                    } else if (currentPlaybackFile.id.isEmpty()) {
-                        drawError("No cloud ID for audio");
-                        currentState = STATE_ERROR;
-                    } else {
-                        // Use local processing workflow instead of edge function
-                        drawProcessing("Processing audio locally...");
-                        
-                        if (processExistingAudio(currentPlaybackFile)) {
-                            drawProcessing("Processing complete! Summary saved to SD card.");
-                            delay(2000);
-                            
-                            // Refresh summaries list
-                            fetchSupabaseSummaries(recentSummaries);
-                        } else {
-                            ProcessingProgress progress = getProcessingProgress();
-                            drawError(String("Processing failed: ") + progress.errorMessage);
-                            delay(2000);
-                        }
-                        
-                        currentState = STATE_AUDIO_PLAYER;
-                        drawAudioPlayer(currentPlaybackFile.filename, false, false);
-                    }
-                }
-                // BACK
-                else if (tx >= 20 && tx <= 100 && ty >= h - 50) {
-                    stopPlayback();
-                    currentState = STATE_LIST_AUDIO;
-                    // Redraw list
-                    std::vector<String> list;
-                    for(auto a : recentAudio) list.push_back(a.filename);
-                    drawList("Audio Files", list.empty() ? std::vector<String>{"(empty)"} : list);
+                // Check if OK button area tapped
+                if (tx >= btnX && tx <= btnX + btnW && ty >= btnY && ty <= btnY + btnH) {
+                    currentState = STATE_MENU;
+                    drawMenu();
                 }
             }
+            
+            // ================================================================
+            // STATE: LIST SUMMARIES
+            // ================================================================
             else if (currentState == STATE_LIST_SUMMARIES) {
                 int y = 100;
+                bool itemSelected = false;
+                
                 for (size_t i = 0; i < recentSummaries.size(); i++) {
-                    if (ty >= y && ty <= y + 50) {
-                        String localPath = "/sd/" + recentSummaries[i].filename;
+                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                        itemSelected = true;
+                        
+                        SummaryFile& selected = recentSummaries[i];
+                        String localPath = "/sd/" + selected.filename;
                         bool loaded = false;
+                        String textContent = "";
+                        
+                        // Try local SD cache first
                         if (storage.activeStorage == STORAGE_SD && SD.exists(localPath)) {
                             File f = SD.open(localPath, FILE_READ);
                             if (f) {
-                                currentTextContent = f.readString();
+                                textContent = f.readString();
                                 f.close();
                                 loaded = true;
                             }
                         }
-                        if (!loaded && isWiFiConnected() && !recentSummaries[i].id.isEmpty()) {
+                        
+                        // If not cached, download from Supabase
+                        if (!loaded && isWiFiConnected() && !selected.id.isEmpty()) {
+                            drawProcessing("Downloading summary...");
+                            
                             if (storage.activeStorage == STORAGE_SD) {
-                                if (downloadSummaryFromSupabase(recentSummaries[i].id, localPath)) {
+                                if (downloadSummaryFromSupabase(selected.id, localPath)) {
                                     File f = SD.open(localPath, FILE_READ);
-                                    if (f) { currentTextContent = f.readString(); f.close(); loaded = true; }
+                                    if (f) {
+                                        textContent = f.readString();
+                                        f.close();
+                                        loaded = true;
+                                    }
                                 }
                             } else {
-                                loaded = fetchSummaryTextFromSupabase(recentSummaries[i].id, currentTextContent);
+                                loaded = fetchSummaryTextFromSupabase(selected.id, textContent);
                             }
                         }
+                        
                         if (!loaded) {
-                            currentTextContent = "(summary not available offline)";
+                            textContent = "(Summary not available offline)";
                         }
+                        
                         currentState = STATE_VIEW_SUMMARY;
-                        drawTextView(currentTextContent);
+                        ebookReader.setText(textContent);
+                        drawEbookPage();
                         break;
                     }
                     y += 60;
                 }
-                if (ty > h - 60 && tx < 120) {
+                
+                // Back button
+                if (!itemSelected && ty > h - 60 && tx < 120) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
             }
+            
+            // ================================================================
+            // STATE: GALLERY
+            // ================================================================
             else if (currentState == STATE_GALLERY) {
                 int y = 100;
+                bool itemSelected = false;
+                
                 for (size_t i = 0; i < recentImages.size(); i++) {
-                    if (ty >= y && ty <= y + 50) {
+                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                        itemSelected = true;
+                        
+                        ImageFile& selected = recentImages[i];
                         bool shown = false;
-                        String localPath = "/sd/" + (recentImages[i].filename.length() ? recentImages[i].filename : ("gallery_" + recentImages[i].id + ".png"));
-
+                        String localPath = "/sd/" + (selected.filename.length() > 0 ? selected.filename : ("gallery_" + selected.id + ".png"));
+                        
+                        // Try SD cache with download if needed
                         if (storage.activeStorage == STORAGE_SD) {
-                            if (!SD.exists(localPath) && isWiFiConnected() && !recentImages[i].id.isEmpty()) {
-                                downloadImageFromSupabase(recentImages[i].id, localPath, recentImages[i].filename);
+                            if (!SD.exists(localPath) && isWiFiConnected() && !selected.id.isEmpty()) {
+                                drawProcessing("Downloading image...");
+                                downloadImageFromSupabase(selected.id, localPath, selected.filename);
                             }
                             if (SD.exists(localPath)) {
-                                drawImageFromFile(recentImages[i].filename, localPath);
+                                drawImageFromFile(selected.filename, localPath);
                                 currentState = STATE_VIEW_IMAGE;
                                 shown = true;
                             }
                         }
-
-                        if (!shown && isWiFiConnected() && !recentImages[i].id.isEmpty()) {
+                        
+                        // If not cached, fetch to buffer
+                        if (!shown && isWiFiConnected() && !selected.id.isEmpty()) {
+                            drawProcessing("Loading image...");
                             std::vector<uint8_t> buf;
-                            if (fetchImageToBuffer(recentImages[i].id, buf) && !buf.empty()) {
-                                drawImageFromBuffer(recentImages[i].filename, buf.data(), buf.size());
+                            if (fetchImageToBuffer(selected.id, buf) && !buf.empty()) {
+                                drawImageFromBuffer(selected.filename, buf.data(), buf.size());
                                 currentState = STATE_VIEW_IMAGE;
                                 shown = true;
                             }
                         }
-
+                        
                         if (!shown) {
                             drawImageMessage("Gallery", "Image not available offline");
                             currentState = STATE_VIEW_IMAGE;
@@ -411,21 +348,35 @@ void loop() {
                     }
                     y += 60;
                 }
-                if (ty > h - 60 && tx < 120) {
+                
+                // Back button
+                if (!itemSelected && ty > h - 60 && tx < 120) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
             }
+            
+            // ================================================================
+            // STATE: VIEW SUMMARY / VIEW IMAGE / ERROR
+            // ================================================================
             else if (currentState == STATE_VIEW_SUMMARY || currentState == STATE_VIEW_IMAGE || currentState == STATE_ERROR) {
-                if (ty > h - 60 && tx < 120) {
-                    if (currentState == STATE_VIEW_IMAGE) {
-                        currentState = STATE_GALLERY;
-                        std::vector<String> list;
-                        for (auto img : recentImages) list.push_back(img.filename.length() ? img.filename : String("(image)"));
-                        drawList("Gallery", list.empty() ? std::vector<String>{"(empty)"} : list);
-                    } else {
-                        currentState = STATE_MENU;
-                        drawMenu();
+                if (currentState == STATE_VIEW_SUMMARY) {
+                    // Use ebook reader touch handling
+                    if (!handleEbookTouch(tx, ty)) {
+                        // User pressed BACK
+                        currentState = STATE_LIST_SUMMARIES;
+                        drawSummariesList();
+                    }
+                } else {
+                    // Back button for images and errors (bottom left)
+                    if (ty > h - 60 && tx < 120) {
+                        if (currentState == STATE_VIEW_IMAGE) {
+                            currentState = STATE_GALLERY;
+                            drawGalleryList();
+                        } else {
+                            currentState = STATE_MENU;
+                            drawMenu();
+                        }
                     }
                 }
             }

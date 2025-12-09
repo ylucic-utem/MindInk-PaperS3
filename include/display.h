@@ -19,14 +19,12 @@ struct Button {
 
 enum AppState {
     STATE_MENU,
-    STATE_RECORDING,
     STATE_LIST_AUDIO,
     STATE_LIST_SUMMARIES,
     STATE_VIEW_SUMMARY,
     STATE_GALLERY,
     STATE_VIEW_IMAGE,
     STATE_PROCESSING,
-    STATE_AUDIO_PLAYER,
     STATE_ERROR
 };
 
@@ -38,8 +36,7 @@ bool checkButtonPress(int x, int y, const Button& btn);
 void drawButton(const Button& btn);
 void displayStatusBar();
 void drawMenu();
-void drawAudioPlayer(String filename, bool isPlaying, bool isPaused);
-void drawRecordingPage(bool isRecording, bool isPaused, bool hasRecordedData);
+void drawMessage(const String& title, const String& msg);
 
 void drawList(String title, const std::vector<String>& items);
 void drawTextView(String text);
@@ -52,10 +49,36 @@ void drawError(const String& message);
 void drawPowerOffScreen();
 
 // ============================================================================
+// EBOOK READER STATE
+// ============================================================================
+struct EbookReader {
+    String fullText;
+    std::vector<String> pages;
+    int currentPage;
+    int totalPages;
+    int linesPerPage;
+    int charsPerLine;
+    
+    EbookReader() : currentPage(0), totalPages(0), linesPerPage(20), charsPerLine(60) {}
+    
+    void setText(const String& text);
+    void paginateText();
+    void nextPage();
+    void prevPage();
+    bool hasNextPage();
+    bool hasPrevPage();
+    String getCurrentPageText();
+};
+
+// ============================================================================
 // DISPLAY STATE
 // ============================================================================
 extern std::vector<Button> menuButtons;
 extern AppState currentState;
 extern String currentTextContent;
+extern EbookReader ebookReader;
+
+void drawEbookPage();
+bool handleEbookTouch(int x, int y);
 
 #endif // DISPLAY_H

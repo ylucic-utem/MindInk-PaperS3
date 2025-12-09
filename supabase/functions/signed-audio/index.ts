@@ -1,0 +1,60 @@
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+
+const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+Deno.serve(async (req: Request) => {
+  try {
+    const url = new URL(req.url);
+    const audioId = url.searchParams.get("id");
+
+    if (!audioId) {
+      return new Response(JSON.stringify({ error: "id parameter required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Fetch audio record to get storage path
+    const { data: audio, error: audioError } = await supabase
+      .from("audio_records")
+      .select("storage_path")
+      .eq("id", audioId)
+      .single();
+
+    if (audioError || !audio) {
+      return new Response(JSON.stringify({ error: "Audio not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Generate signed URL for the audio file
+    const { data: signedUrlData, error: urlError } = await supabase.storage
+      .from("audio-files")
+      .createSignedUrl(audio.storage_path, 3600); // 1 hour expiry
+
+    if (urlError || !signedUrlData) {
+      return new Response(JSON.stringify({ error: "Failed to generate signed URL" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ url: signedUrlData.signedUrl }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("[signed-audio] Error:", error);
+    return new Response(JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+});

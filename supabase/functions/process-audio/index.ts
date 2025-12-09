@@ -32,6 +32,10 @@ const processAudioAsync = async (audioId: string) => {
       .eq("id", audioId);
 
     console.log("[process-audio] Status updated to processing");
+    console.log("[process-audio] API Keys present:", {
+      elevenLabs: !!elevenLabsKey,
+      gemini: !!geminiKey
+    });
 
     if (!elevenLabsKey || !geminiKey) {
       console.error("[process-audio] Missing API keys. Set ELEVEN_LABS_API_KEY and GEMINI_API_KEY as environment variables.");
@@ -54,7 +58,7 @@ const processAudioAsync = async (audioId: string) => {
     // Download audio
     console.log("[process-audio] Downloading audio from:", signedUrlData.signedUrl);
     const audioResponse = await fetch(signedUrlData.signedUrl);
-    
+
     if (!audioResponse.ok) {
       throw new Error(`Failed to download audio: ${audioResponse.status} ${audioResponse.statusText}`);
     }
@@ -65,18 +69,20 @@ const processAudioAsync = async (audioId: string) => {
     // Determine actual MIME type based on file extension
     const isWebM = audioData.file_name.toLowerCase().endsWith('.webm');
     const contentType = isWebM ? 'audio/webm' : 'audio/mpeg';
-    
+
     // Create FormData for multipart upload
     const formData = new FormData();
     formData.append(
-      "file", 
-      new Blob([audioBuffer], { type: contentType }), 
+      "file",
+      new Blob([audioBuffer], { type: contentType }),
       audioData.file_name
     );
-    formData.append("model_id", "eleven_multilingual_v2");
+    formData.append("model_id", "scribe_v1");  // Use scribe_v1 for speech-to-text
 
     // POST audio to ElevenLabs to get transcription
     console.log(`[process-audio] Sending ${contentType} to ElevenLabs...`);
+    console.log(`[process-audio] File size: ${audioBuffer.byteLength} bytes, name: ${audioData.file_name}`);
+
     const elResponse = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
       method: "POST",
       headers: {
@@ -84,6 +90,8 @@ const processAudioAsync = async (audioId: string) => {
       },
       body: formData,
     });
+
+    console.log(`[process-audio] ElevenLabs response status: ${elResponse.status}`);
 
     if (!elResponse.ok) {
       const errorText = await elResponse.text();
@@ -163,16 +171,21 @@ const processAudioAsync = async (audioId: string) => {
       });
 
     // Insert into summaries
-    const { data: summaryRow } = await supabase
+    const { data: summaryRow, error: summaryError } = await supabase
       .from("summaries")
       .insert([{
         audio_id: audioId,
-        transcription_id: transcriptionRow?.id,
+        transcription_text: transcription,
         summary_storage_path: summaryFileName,
         status: "done",
       }])
       .select()
       .single();
+
+    if (summaryError) {
+      console.error("[process-audio] Failed to insert summary:", summaryError);
+      throw new Error(`Summary insert failed: ${summaryError.message}`);
+    }
 
     // Update audio record
     await supabase
@@ -183,11 +196,14 @@ const processAudioAsync = async (audioId: string) => {
     console.log("[process-audio] Complete!");
   } catch (error) {
     console.error("[process-audio] Error:", error);
-    await supabase
-      .from("audio_records")
-      .update({ status: "error" })
-      .eq("id", audioId)
-      .catch((e) => console.error("Failed to update error status:", e));
+    try {
+      await supabase
+        .from("audio_records")
+        .update({ status: "error" })
+        .eq("id", audioId);
+    } catch (e) {
+      console.error("Failed to update error status:", e);
+    }
   }
 };
 
