@@ -125,28 +125,65 @@ static bool downloadToSD(const String& url, const String& destPath) {
     WiFiClientSecure client;
     client.setInsecure();
     http.begin(client, url);
+    http.setTimeout(15000);
     int code = http.GET();
     if (code != 200) {
         Serial.printf("[SUPABASE] download failed %d\n", code);
         http.end();
         return false;
     }
+    
+    int contentLength = http.getSize();
+    Serial.printf("[SUPABASE] Downloading %d bytes to %s\n", contentLength, destPath.c_str());
+    
     File f = SD.open(destPath, FILE_WRITE);
-    if (!f) { http.end(); return false; }
+    if (!f) { 
+        Serial.println("[SUPABASE] Failed to open file for writing");
+        http.end(); 
+        return false; 
+    }
+    
     uint8_t buf[1024];
     WiFiClient* stream = http.getStreamPtr();
-    while (http.connected()) {
+    int totalRead = 0;
+    unsigned long lastDataTime = millis();
+    const unsigned long timeout = 10000; // 10 second timeout for no data
+    
+    // For chunked encoding, contentLength will be -1
+    while (http.connected() || stream->available()) {
         size_t avail = stream->available();
         if (avail) {
-            int r = stream->readBytes((char*)buf, avail > sizeof(buf) ? sizeof(buf) : avail);
-            f.write(buf, r);
+            size_t toRead = avail > sizeof(buf) ? sizeof(buf) : avail;
+            int r = stream->readBytes((char*)buf, toRead);
+            if (r > 0) {
+                f.write(buf, r);
+                totalRead += r;
+                lastDataTime = millis();
+                
+                // If we know content length and have read it all, we're done
+                if (contentLength > 0 && totalRead >= contentLength) {
+                    Serial.printf("[SUPABASE] Downloaded %d/%d bytes - complete\n", totalRead, contentLength);
+                    break;
+                }
+            }
         } else {
-            delay(1);
+            // No data available - check for timeout
+            if (millis() - lastDataTime > timeout) {
+                Serial.println("[SUPABASE] Download timeout - no data received");
+                break;
+            }
+            // For chunked encoding with no content length, if we've read data and nothing more is coming, we might be done
+            if (contentLength < 0 && totalRead > 0 && !http.connected()) {
+                break;
+            }
+            delay(10);
         }
     }
+    
     f.close();
     http.end();
-    return true;
+    Serial.printf("[SUPABASE] Download complete: %d bytes written\n", totalRead);
+    return totalRead > 0;
 }
 
 static String callSignedUrl(const String& fn, const String& id) {
@@ -210,16 +247,24 @@ bool fetchImageToBuffer(const String& imageId, std::vector<uint8_t>& outBuf) {
     WiFiClientSecure client;
     client.setInsecure();
     http.begin(client, signedUrl);
+    http.setTimeout(15000);
     int code = http.GET();
     if (code != 200) {
         http.end();
         return false;
     }
 
+    int contentLength = http.getSize();
+    Serial.printf("[SUPABASE] Fetching image to buffer, size: %d bytes\n", contentLength);
+
     WiFiClient* stream = http.getStreamPtr();
     outBuf.clear();
     uint8_t temp[1024];
-    while (http.connected()) {
+    int totalRead = 0;
+    unsigned long lastDataTime = millis();
+    const unsigned long timeout = 15000; // 15 second timeout for images (larger files)
+
+    while (http.connected() || stream->available()) {
         size_t avail = stream->available();
         if (avail) {
             size_t toRead = avail > sizeof(temp) ? sizeof(temp) : avail;
@@ -228,13 +273,30 @@ bool fetchImageToBuffer(const String& imageId, std::vector<uint8_t>& outBuf) {
                 size_t offset = outBuf.size();
                 outBuf.resize(offset + r);
                 memcpy(outBuf.data() + offset, temp, r);
+                totalRead += r;
+                lastDataTime = millis();
+                
+                // If we know content length and have read it all, we're done
+                if (contentLength > 0 && totalRead >= contentLength) {
+                    Serial.printf("[SUPABASE] Image fetch complete: %d/%d bytes\n", totalRead, contentLength);
+                    break;
+                }
             }
         } else {
-            delay(1);
+            // No data available - check for timeout
+            if (millis() - lastDataTime > timeout) {
+                Serial.println("[SUPABASE] Image fetch timeout - no data received");
+                break;
+            }
+            if (contentLength < 0 && totalRead > 0 && !http.connected()) {
+                break;
+            }
+            delay(10);
         }
     }
 
     http.end();
+    Serial.printf("[SUPABASE] Image buffer complete: %d bytes\n", totalRead);
     return !outBuf.empty();
 }
 

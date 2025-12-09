@@ -24,15 +24,7 @@ extern const char* GEMINI_TEXT_URL;
 extern const char* GEMINI_IMAGE_URL;
 
 // ============================================================================
-// AUDIO RECORDING CONFIG
-// ============================================================================
-#define RECORD_SAMPLE_RATE 16000
-#define RECORD_BIT_DEPTH   16
-#define RX_BUFFER_SIZE     1024
-#define MAX_RECORDING_TIME 300000
-
-// ============================================================================
-// HARDWARE CONFIG - PAPERS3 SPECIFIC
+// HARDWARE CONFIG - PAPERS3 SPECIFIC (for SD caching)
 // ============================================================================
 #define SD_CS   47
 #define SD_SCK  39
@@ -40,3 +32,4 @@ extern const char* GEMINI_IMAGE_URL;
 #define SD_MISO 40
 
 #endif // CONFIG_H
+
