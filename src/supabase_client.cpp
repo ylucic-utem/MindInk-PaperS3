@@ -5,9 +5,14 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <SD.h>
+#include <vector>
+#include <cstring>
 
 static const char* REST_AUDIO_PATH = "/rest/v1/audio_records?select=id,file_name,storage_path,summary_id,status&order=recording_date.desc&limit=50";
 static const char* REST_SUMMARY_PATH = "/rest/v1/summaries?select=id,audio_id,status,summary_storage_path,infographic_id&audio_id=eq.";
+// Some databases may not include created_at; order by id to avoid 42703 errors.
+static const char* REST_SUMMARY_LIST = "/rest/v1/summaries?select=id,audio_id,status,summary_storage_path&order=id.desc&limit=50";
+static const char* REST_IMAGE_LIST = "/rest/v1/infographics?select=id,summary_id,storage_path,image_file_name,generation_date&order=generation_date.desc&limit=50";
 
 static bool getJson(const String& url, const String& bearer, DynamicJsonDocument& doc) {
     if (!isWiFiConnected()) return false;
@@ -24,10 +29,20 @@ static bool getJson(const String& url, const String& bearer, DynamicJsonDocument
         http.end();
         return false;
     }
-    DeserializationError err = deserializeJson(doc, http.getStream());
+    
+    // Handle chunked responses by reading entire payload into buffer first
+    String payload = http.getString();
     http.end();
+    
+    if (payload.isEmpty()) {
+        Serial.println("[SUPABASE] Empty response body");
+        return false;
+    }
+    
+    DeserializationError err = deserializeJson(doc, payload);
     if (err) {
         Serial.printf("[SUPABASE] JSON parse error: %s\n", err.c_str());
+        Serial.printf("[SUPABASE] Payload: %s\n", payload.c_str());
         return false;
     }
     return true;
@@ -61,6 +76,46 @@ bool fetchSupabaseSummary(const String& audioId, SummaryFile& summary) {
     JsonObject obj = doc.as<JsonArray>()[0];
     summary.filename = obj["id"].as<String>() + ".txt";
     summary.relatedAudioFilename = audioId;
+    summary.id = obj["id"].as<String>();
+    summary.storagePath = obj["summary_storage_path"].as<String>();
+    summary.status = obj["status"].as<String>();
+    return true;
+}
+
+bool fetchSupabaseSummaries(std::vector<SummaryFile>& out) {
+    out.clear();
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
+    String url = String(SUPABASE_URL) + REST_SUMMARY_LIST;
+    DynamicJsonDocument doc(8192);
+    if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
+    if (!doc.is<JsonArray>()) return false;
+    for (JsonObject obj : doc.as<JsonArray>()) {
+        SummaryFile s;
+        s.id = obj["id"].as<String>();
+        s.filename = s.id + ".txt";
+        s.relatedAudioFilename = obj["audio_id"].as<String>();
+        s.storagePath = obj["summary_storage_path"].as<String>();
+        s.status = obj["status"].as<String>();
+        out.push_back(s);
+    }
+    return true;
+}
+
+bool fetchSupabaseImages(std::vector<ImageFile>& out) {
+    out.clear();
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
+    String url = String(SUPABASE_URL) + REST_IMAGE_LIST;
+    DynamicJsonDocument doc(8192);
+    if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
+    if (!doc.is<JsonArray>()) return false;
+    for (JsonObject obj : doc.as<JsonArray>()) {
+        ImageFile img;
+        img.id = obj["id"].as<String>();
+        img.summaryId = obj["summary_id"].as<String>();
+        img.storagePath = obj["storage_path"].as<String>();
+        img.filename = obj["image_file_name"].as<String>();
+        out.push_back(img);
+    }
     return true;
 }
 
@@ -114,15 +169,73 @@ static String callSignedUrl(const String& fn, const String& id) {
 bool downloadAudioFromSupabase(const AudioFile& remote, String& localPath) {
     String signedUrl = callSignedUrl("signed-audio", remote.id);
     if (signedUrl.isEmpty()) return false;
-    localPath = "/sd/cloud_" + remote.id + ".wav";
+    localPath = "/audio/cloud_" + remote.id + ".wav";
     return downloadToSD(signedUrl, localPath);
 }
 
 bool downloadSummaryFromSupabase(const String& summaryId, String& localPath) {
     String signedUrl = callSignedUrl("signed-summary", summaryId);
     if (signedUrl.isEmpty()) return false;
-    localPath = "/sd/summary_" + summaryId + ".txt";
+    localPath = "/summaries/summary_" + summaryId + ".txt";
     return downloadToSD(signedUrl, localPath);
+}
+
+bool downloadImageFromSupabase(const String& imageId, String& localPath, const String& filename) {
+    String signedUrl = callSignedUrl("signed-image", imageId);
+    if (signedUrl.isEmpty()) return false;
+    String resolvedName = filename.length() ? filename : ("gallery_" + imageId + ".png");
+    localPath = "/infographics/" + resolvedName;
+    return downloadToSD(signedUrl, localPath);
+}
+
+bool fetchSummaryTextFromSupabase(const String& summaryId, String& outText) {
+    String signedUrl = callSignedUrl("signed-summary", summaryId);
+    if (signedUrl.isEmpty()) return false;
+    if (!isWiFiConnected()) return false;
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    http.begin(client, signedUrl);
+    int code = http.GET();
+    if (code != 200) { http.end(); return false; }
+    outText = http.getString();
+    http.end();
+    return true;
+}
+
+bool fetchImageToBuffer(const String& imageId, std::vector<uint8_t>& outBuf) {
+    String signedUrl = callSignedUrl("signed-image", imageId);
+    if (signedUrl.isEmpty() || !isWiFiConnected()) return false;
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    http.begin(client, signedUrl);
+    int code = http.GET();
+    if (code != 200) {
+        http.end();
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    outBuf.clear();
+    uint8_t temp[1024];
+    while (http.connected()) {
+        size_t avail = stream->available();
+        if (avail) {
+            size_t toRead = avail > sizeof(temp) ? sizeof(temp) : avail;
+            int r = stream->readBytes((char*)temp, toRead);
+            if (r > 0) {
+                size_t offset = outBuf.size();
+                outBuf.resize(offset + r);
+                memcpy(outBuf.data() + offset, temp, r);
+            }
+        } else {
+            delay(1);
+        }
+    }
+
+    http.end();
+    return !outBuf.empty();
 }
 
 bool triggerProcessAudio(const String& audioId) {

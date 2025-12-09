@@ -24,6 +24,7 @@ enum AppState {
     STATE_LIST_SUMMARIES,
     STATE_VIEW_SUMMARY,
     STATE_GALLERY,
+    STATE_VIEW_IMAGE,
     STATE_PROCESSING,
     STATE_AUDIO_PLAYER,
     STATE_ERROR
@@ -43,6 +44,9 @@ void drawRecordingPage(bool isRecording, bool isPaused, bool hasRecordedData);
 void drawList(String title, const std::vector<String>& items);
 void drawTextView(String text);
 void drawGallery(const std::vector<ImageFile>& images);
+void drawImageMessage(const String& title, const String& message);
+void drawImageFromFile(const String& label, const String& path);
+void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len);
 void drawProcessing(const String& message = "Processing...");
 void drawError(const String& message);
 void drawPowerOffScreen();

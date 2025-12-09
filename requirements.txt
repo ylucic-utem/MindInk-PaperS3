@@ -1,0 +1,19 @@
+# Python dependencies for MindInk test script
+
+# Supabase client
+supabase-py>=2.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# HTTP requests
+requests>=2.31.0
+
+# Google Generative AI (Gemini) - Latest SDK
+google-genai>=0.1.0
+
+# ElevenLabs Speech-to-Text
+elevenlabs>=0.2.0
+
+# Optional but recommended
+rich>=13.0.0  # Better console output

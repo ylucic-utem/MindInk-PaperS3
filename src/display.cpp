@@ -141,6 +141,70 @@ void drawGallery(const std::vector<ImageFile>& images) {
     M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
 }
 
+void drawImageMessage(const String& title, const String& message) {
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.drawCenterString(title, M5.Display.width()/2, 50);
+    M5.Display.setTextSize(1);
+    M5.Display.drawCenterString(message, M5.Display.width()/2, M5.Display.height()/2);
+    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+}
+
+void drawImageFromFile(const String& label, const String& path) {
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
+    M5.Display.setTextSize(1);
+
+    bool drawn = false;
+    if (path.endsWith(".png")) {
+        M5.Display.drawPngFile(path.c_str(), 0, 60);
+        drawn = true;
+    } else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+        M5.Display.drawJpgFile(path.c_str(), 0, 60);
+        drawn = true;
+    }
+
+    if (!drawn) {
+        M5.Display.drawCenterString("Unsupported image format", M5.Display.width()/2, M5.Display.height()/2);
+    }
+
+    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+}
+
+void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
+    M5.Display.setTextSize(1);
+
+    // Attempt PNG first; fall back to JPG.
+    bool drawn = false;
+    if (M5.Display.drawPng(data, len, 0, 60) == 0) {
+        drawn = true;
+    } else if (M5.Display.drawJpg(data, len, 0, 60) == 0) {
+        drawn = true;
+    }
+
+    if (!drawn) {
+        M5.Display.drawCenterString("Unable to render image", M5.Display.width()/2, M5.Display.height()/2);
+    }
+
+    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+}
+
 void drawProcessing(const String& message) {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
@@ -163,7 +227,7 @@ void drawError(const String& message) {
     
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.drawCenterString(message, M5.Display.width()/2, M5.Display.height()/2, M5.Display.width() - 40);
+    M5.Display.drawString(message, 20, M5.Display.height()/2);
     
     M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
@@ -260,6 +324,13 @@ void drawAudioPlayer(String filename, bool isPlaying, bool isPaused) {
     
     // STOP
     drawControlBtn(startX + 2 * (btnW + 20), y, btnW, btnH, "STOP", !isPlaying);
+
+    // MAKE SUMMARY
+    int summaryW = 180;
+    int summaryH = 50;
+    int summaryX = (M5.Display.width() - summaryW) / 2;
+    int summaryY = y + 80;
+    drawControlBtn(summaryX, summaryY, summaryW, summaryH, "MAKE SUMMARY");
     
     // BACK
     drawControlBtn(20, M5.Display.height() - 50, 80, 40, "BACK");

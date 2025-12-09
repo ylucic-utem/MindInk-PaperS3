@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../../Arduino/InkyScribe/sketch_dec3a"
+		},
+		{
+			"name": "251203-225501-esp32doit-devkit-v1",
+			"path": ".."
+		}
+	],
+	"settings": {}
+}

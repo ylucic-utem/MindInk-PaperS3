@@ -34,6 +34,7 @@ String getHttpCodeDescription(int code) {
 TranscriptionResult transcribeAudio(const String& audioFilePath) {
     TranscriptionResult result;
     
+    Serial.println("[API] === TRANSCRIPTION START ===");
     Serial.printf("[API] Transcribing audio: %s\n", audioFilePath.c_str());
     
     // Check WiFi connection
@@ -44,111 +45,179 @@ TranscriptionResult transcribeAudio(const String& audioFilePath) {
     }
     
     // Check if audio file exists
-    File audioFile;
     if (!SD.exists(audioFilePath)) {
         result.error = "Audio file not found: " + audioFilePath;
+        Serial.printf("[API] ERROR: %s\n", result.error.c_str());
         return result;
     }
     
     // Read audio file
-    audioFile = SD.open(audioFilePath);
+    File audioFile = SD.open(audioFilePath, FILE_READ);
     if (!audioFile) {
         result.error = "Cannot open audio file";
+        Serial.printf("[API] ERROR: %s\n", result.error.c_str());
         return result;
     }
     
     size_t fileSize = audioFile.size();
     Serial.printf("[API] Audio file size: %d bytes\n", fileSize);
+    Serial.printf("[API] Free heap before fileBuffer allocation: %d bytes\n", ESP.getFreeHeap());
     
-    // Create HTTPClient with HTTPS
-    HTTPClient http;
-    WiFiClientSecure client;
-    client.setInsecure();  // For testing - use proper certificates in production
-    
-    // Construct request
-    String url = String(EL_API_URL);
-    
-    http.begin(client, url);
-    http.addHeader("xi-api-key", ELEVEN_LABS_API_KEY);
-    http.addHeader("Content-Type", "audio/wav");
-    
-    // Send audio data
-    Serial.println("[API] Sending audio to Eleven Labs...");
-    
-    // Read file in chunks to avoid memory issues
-    uint8_t buffer[1024];
-    int bytesRead = 0;
-    
-    for (int attempt = 0; attempt < API_MAX_RETRIES; attempt++) {
-        if (attempt > 0) {
-            Serial.printf("[API] Retry attempt %d/%d...\n", attempt + 1, API_MAX_RETRIES);
-            delay(API_RETRY_DELAY_MS);
-            audioFile.seek(0);  // Reset file pointer
-        }
-        
-        // Re-establish HTTP connection for each retry
-        http.begin(client, url);
-        http.addHeader("xi-api-key", ELEVEN_LABS_API_KEY);
-        http.addHeader("Content-Type", "audio/wav");
-        
-        // TODO: Implement proper streaming upload with chunked transfer
-        // For now, we'll read entire file into memory (not ideal for large files)
-        
-        uint8_t* fileBuffer = (uint8_t*)malloc(fileSize);
-        if (!fileBuffer) {
-            result.error = "Insufficient memory to read file";
-            audioFile.close();
-            return result;
-        }
-        
-        size_t bytesRead = audioFile.readBytes((char*)fileBuffer, fileSize);
-        
-        int httpCode = http.POST(fileBuffer, fileSize);
-        result.httpCode = httpCode;
-        
-        free(fileBuffer);
-        
-        if (httpCode > 0) {
-            Serial.printf("[API] HTTP Response Code: %d (%s)\n", httpCode, getHttpCodeDescription(httpCode).c_str());
-            
-            if (httpCode == 200 || httpCode == 201) {
-                // Parse JSON response
-                String payload = http.getString();
-                Serial.printf("[API] Response: %s\n", payload.c_str());
-                
-                DynamicJsonDocument doc(1024);
-                DeserializationError error = deserializeJson(doc, payload);
-                
-                if (!error) {
-                    if (doc.containsKey("text")) {
-                        result.text = doc["text"].as<String>();
-                        result.success = true;
-                        Serial.println("[API] Transcription successful");
-                        break;  // Success - exit retry loop
-                    } else {
-                        result.error = "No text in response";
-                    }
-                } else {
-                    result.error = "JSON parse error: " + String(error.c_str());
-                }
-            } else if (httpCode == 429) {
-                result.error = "Rate limit exceeded - try again later";
-                // Continue retry
-            } else if (httpCode == 401 || httpCode == 403) {
-                result.error = "Authentication failed - check API key";
-                break;  // Don't retry authentication errors
-            } else {
-                result.error = "HTTP " + String(httpCode) + ": " + getHttpCodeDescription(httpCode);
-            }
-        } else {
-            result.error = "Connection failed: " + http.errorToString(httpCode);
-        }
-        
-        http.end();
+    // Validate file size (ElevenLabs limits to 25MB for free tier)
+    if (fileSize > 26214400) {  // 25MB
+        result.error = "Audio file too large (max 25MB)";
+        audioFile.close();
+        return result;
     }
     
+    // Read entire file into buffer
+    uint8_t* fileBuffer = (uint8_t*)malloc(fileSize);
+    if (!fileBuffer) {
+        result.error = "Insufficient memory to read file (needed " + String(fileSize) + " bytes, free: " + String(ESP.getFreeHeap()) + ")";
+        Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+        audioFile.close();
+        return result;
+    }
+    
+    Serial.printf("[API] fileBuffer allocated successfully: %d bytes\n", fileSize);
+    Serial.printf("[API] Free heap after fileBuffer allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    size_t bytesRead = audioFile.readBytes((char*)fileBuffer, fileSize);
     audioFile.close();
+    
+    if (bytesRead != fileSize) {
+        result.error = "Failed to read entire audio file";
+        free(fileBuffer);
+        return result;
+    }
+    
+    Serial.printf("[API] Read %d bytes from file\n", bytesRead);
+    
+    // Create HTTPClient with proper multipart form-data for ElevenLabs
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    
+    String url = "https://api.elevenlabs.io/v1/speech-to-text";
+    Serial.printf("[API] Connecting to: %s\n", url.c_str());
+    
+    // Set longer timeout for transcription (60 seconds)
+    http.setTimeout(60000);
+    
+    if (!http.begin(client, url)) {
+        result.error = "Failed to begin HTTP connection";
+        Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+        free(fileBuffer);
+        return result;
+    }
+    
+    // Add authorization header
+    http.addHeader("xi-api-key", ELEVEN_LABS_API_KEY);
+    
+    // Construct multipart form-data boundary
+    String boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW";
+    String contentType = "multipart/form-data; boundary=" + boundary;
+    http.addHeader("Content-Type", contentType);
+    
+    Serial.println("[API] Building multipart form data...");
+    
+    // Build multipart form data manually with memory-efficient approach
+    String modelId = "eleven_flash_v2_latest";
+    
+    String formStart = "--" + boundary + "\r\n";
+    formStart += "Content-Disposition: form-data; name=\"model_id\"\r\n\r\n";
+    formStart += modelId + "\r\n";
+    formStart += "--" + boundary + "\r\n";
+    formStart += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.webm\"\r\n";
+    formStart += "Content-Type: audio/webm\r\n\r\n";
+    
+    String formEnd = "\r\n--" + boundary + "--\r\n";
+    
+    // Calculate total size
+    size_t totalSize = formStart.length() + fileSize + formEnd.length();
+    Serial.printf("[API] Total form data size: %d bytes\n", totalSize);
+    Serial.printf("[API] Free heap before form buffer: %d bytes\n", ESP.getFreeHeap());
+    
+    // Try to allocate form buffer
+    uint8_t* formBuffer = (uint8_t*)malloc(totalSize);
+    if (!formBuffer) {
+        result.error = "Insufficient memory for form data (needed " + String(totalSize) + " bytes, free: " + String(ESP.getFreeHeap()) + ")";
+        Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+        http.end();
+        free(fileBuffer);
+        return result;
+    }
+    
+    Serial.printf("[API] formBuffer allocated successfully: %d bytes\n", totalSize);
+    Serial.printf("[API] Free heap after formBuffer allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    // Copy form data
+    Serial.println("[API] Copying form data parts...");
+    size_t offset = 0;
+    memcpy(formBuffer + offset, formStart.c_str(), formStart.length());
+    offset += formStart.length();
+    memcpy(formBuffer + offset, fileBuffer, fileSize);
+    offset += fileSize;
+    memcpy(formBuffer + offset, formEnd.c_str(), formEnd.length());
+    
+    Serial.printf("[API] Sending %d bytes to ElevenLabs (model: %s)...\n", totalSize, modelId.c_str());
+    
+    // Send the form data with error checking
+    int httpCode = http.POST(formBuffer, totalSize);
+    result.httpCode = httpCode;
+    
+    Serial.printf("[API] HTTP POST sent, waiting for response... (code: %d)\n", httpCode);
+    
+    if (httpCode > 0) {
+        Serial.printf("[API] HTTP Response Code: %d\n", httpCode);
+        
+        if (httpCode == 200 || httpCode == 201) {
+            String payload = http.getString();
+            Serial.printf("[API] Response received: %d bytes\n", payload.length());
+            
+            // Parse JSON response
+            DynamicJsonDocument doc(2048);
+            DeserializationError error = deserializeJson(doc, payload);
+            
+            if (!error) {
+                // Try both "transcription" (correct) and "text" fields
+                if (doc.containsKey("transcription")) {
+                    result.text = doc["transcription"].as<String>();
+                    result.success = true;
+                    Serial.printf("[API] ✓ Transcription successful: %d characters\n", result.text.length());
+                } else if (doc.containsKey("text")) {
+                    result.text = doc["text"].as<String>();
+                    result.success = true;
+                    Serial.printf("[API] ✓ Transcription successful: %d characters\n", result.text.length());
+                } else {
+                    result.error = "No transcription field in response";
+                    Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+                    Serial.printf("[API] Response: %s\n", payload.substring(0, 300).c_str());
+                }
+            } else {
+                result.error = String("JSON parse error: ") + error.c_str();
+                Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+                Serial.printf("[API] Response: %s\n", payload.substring(0, 300).c_str());
+            }
+        } else {
+            String payload = http.getString();
+            result.error = "HTTP " + String(httpCode) + ": " + getHttpCodeDescription(httpCode);
+            if (!payload.isEmpty()) {
+                result.error += " - " + payload.substring(0, 200);
+            }
+            Serial.printf("[API] ERROR: %s\n", result.error.c_str());
+            Serial.printf("[API] Response: %s\n", payload.substring(0, 300).c_str());
+        }
+    } else {
+        result.error = "Connection failed: " + http.errorToString(httpCode);
+        Serial.printf("[API] ERROR: %s (httpCode: %d)\n", result.error.c_str(), httpCode);
+    }
+    
     http.end();
+    free(fileBuffer);
+    free(formBuffer);
+    
+    Serial.printf("[API] Free heap after cleanup: %d bytes\n", ESP.getFreeHeap());
     
     return result;
 }

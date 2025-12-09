@@ -19,6 +19,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <SD.h>
 
 // Include all modular headers
 #include "config.h"
@@ -28,6 +29,7 @@
 #include "api.h"
 #include "wifi_manager.h"
 #include "supabase_client.h"
+#include "local_processing.h"
 
 // ============================================================================
 // GLOBAL STATE
@@ -66,6 +68,9 @@ void setup() {
     
     // Initialize audio system
     initAudio();
+    
+    // Initialize local processing (transcription/summarization workflow)
+    initLocalProcessing();
     
     // Initialize WiFi
     initWiFi();
@@ -141,12 +146,24 @@ void loop() {
                 else if (checkButtonPress(tx, ty, menuButtons[2])) { // SUMMARIES
                     currentState = STATE_LIST_SUMMARIES;
                     std::vector<String> list;
-                    for(auto s : recentSummaries) list.push_back(s.filename);
+                    recentSummaries.clear();
+                    if (isWiFiConnected() && fetchSupabaseSummaries(recentSummaries)) {
+                        for (auto s : recentSummaries) list.push_back(s.filename + (s.status.length() ? " (" + s.status + ")" : ""));
+                    } else {
+                        for(auto s : recentSummaries) list.push_back(s.filename);
+                    }
                     drawList("Summaries", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
                 else if (checkButtonPress(tx, ty, menuButtons[3])) { // GALLERY
                     currentState = STATE_GALLERY;
-                    drawGallery(recentImages);
+                    recentImages.clear();
+                    std::vector<String> list;
+                    if (isWiFiConnected() && fetchSupabaseImages(recentImages)) {
+                        for (auto img : recentImages) list.push_back(img.filename.length() ? img.filename : String("(image)"));
+                    } else {
+                        for (auto img : recentImages) list.push_back(img.filename);
+                    }
+                    drawList("Gallery", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
                 else if (checkButtonPress(tx, ty, menuButtons[4])) { // DEEP SLEEP
                     drawPowerOffScreen();
@@ -242,15 +259,6 @@ void loop() {
                 for (size_t i = 0; i < recentAudio.size(); i++) {
                     if (ty >= y && ty <= y + 50) {
                         currentPlaybackFile = recentAudio[i];
-                        // Download from Supabase if needed
-                        String localPath = currentPlaybackFile.filename;
-                        if (isWiFiConnected() && !currentPlaybackFile.id.isEmpty()) {
-                            if (!SD.exists(localPath)) {
-                                if (downloadAudioFromSupabase(currentPlaybackFile, localPath)) {
-                                    currentPlaybackFile.filename = localPath;
-                                }
-                            }
-                        }
                         currentState = STATE_AUDIO_PLAYER;
                         drawAudioPlayer(currentPlaybackFile.filename, false, false);
                         break;
@@ -268,6 +276,10 @@ void loop() {
                 int btnH = 50;
                 int startX = (w - (3 * btnW + 40)) / 2;
                 int y = 160;
+                int summaryW = 180;
+                int summaryH = 50;
+                int summaryX = (w - summaryW) / 2;
+                int summaryY = y + 80;
                 
                 // PLAY
                 if (tx >= startX && tx <= startX + btnW && ty >= y && ty <= y + btnH) {
@@ -288,6 +300,34 @@ void loop() {
                     stopPlayback();
                     drawAudioPlayer(currentPlaybackFile.filename, false, false);
                 }
+                // MAKE SUMMARY
+                else if (tx >= summaryX && tx <= summaryX + summaryW && ty >= summaryY && ty <= summaryY + summaryH) {
+                    if (!isWiFiConnected()) {
+                        drawError("WiFi not connected");
+                        currentState = STATE_ERROR;
+                    } else if (currentPlaybackFile.id.isEmpty()) {
+                        drawError("No cloud ID for audio");
+                        currentState = STATE_ERROR;
+                    } else {
+                        // Use local processing workflow instead of edge function
+                        drawProcessing("Processing audio locally...");
+                        
+                        if (processExistingAudio(currentPlaybackFile)) {
+                            drawProcessing("Processing complete! Summary saved to SD card.");
+                            delay(2000);
+                            
+                            // Refresh summaries list
+                            fetchSupabaseSummaries(recentSummaries);
+                        } else {
+                            ProcessingProgress progress = getProcessingProgress();
+                            drawError(String("Processing failed: ") + progress.errorMessage);
+                            delay(2000);
+                        }
+                        
+                        currentState = STATE_AUDIO_PLAYER;
+                        drawAudioPlayer(currentPlaybackFile.filename, false, false);
+                    }
+                }
                 // BACK
                 else if (tx >= 20 && tx <= 100 && ty >= h - 50) {
                     stopPlayback();
@@ -298,11 +338,95 @@ void loop() {
                     drawList("Audio Files", list.empty() ? std::vector<String>{"(empty)"} : list);
                 }
             }
-            else if (currentState == STATE_LIST_SUMMARIES || currentState == STATE_VIEW_SUMMARY || 
-                     currentState == STATE_GALLERY || currentState == STATE_ERROR) {
+            else if (currentState == STATE_LIST_SUMMARIES) {
+                int y = 100;
+                for (size_t i = 0; i < recentSummaries.size(); i++) {
+                    if (ty >= y && ty <= y + 50) {
+                        String localPath = "/sd/" + recentSummaries[i].filename;
+                        bool loaded = false;
+                        if (storage.activeStorage == STORAGE_SD && SD.exists(localPath)) {
+                            File f = SD.open(localPath, FILE_READ);
+                            if (f) {
+                                currentTextContent = f.readString();
+                                f.close();
+                                loaded = true;
+                            }
+                        }
+                        if (!loaded && isWiFiConnected() && !recentSummaries[i].id.isEmpty()) {
+                            if (storage.activeStorage == STORAGE_SD) {
+                                if (downloadSummaryFromSupabase(recentSummaries[i].id, localPath)) {
+                                    File f = SD.open(localPath, FILE_READ);
+                                    if (f) { currentTextContent = f.readString(); f.close(); loaded = true; }
+                                }
+                            } else {
+                                loaded = fetchSummaryTextFromSupabase(recentSummaries[i].id, currentTextContent);
+                            }
+                        }
+                        if (!loaded) {
+                            currentTextContent = "(summary not available offline)";
+                        }
+                        currentState = STATE_VIEW_SUMMARY;
+                        drawTextView(currentTextContent);
+                        break;
+                    }
+                    y += 60;
+                }
                 if (ty > h - 60 && tx < 120) {
                     currentState = STATE_MENU;
                     drawMenu();
+                }
+            }
+            else if (currentState == STATE_GALLERY) {
+                int y = 100;
+                for (size_t i = 0; i < recentImages.size(); i++) {
+                    if (ty >= y && ty <= y + 50) {
+                        bool shown = false;
+                        String localPath = "/sd/" + (recentImages[i].filename.length() ? recentImages[i].filename : ("gallery_" + recentImages[i].id + ".png"));
+
+                        if (storage.activeStorage == STORAGE_SD) {
+                            if (!SD.exists(localPath) && isWiFiConnected() && !recentImages[i].id.isEmpty()) {
+                                downloadImageFromSupabase(recentImages[i].id, localPath, recentImages[i].filename);
+                            }
+                            if (SD.exists(localPath)) {
+                                drawImageFromFile(recentImages[i].filename, localPath);
+                                currentState = STATE_VIEW_IMAGE;
+                                shown = true;
+                            }
+                        }
+
+                        if (!shown && isWiFiConnected() && !recentImages[i].id.isEmpty()) {
+                            std::vector<uint8_t> buf;
+                            if (fetchImageToBuffer(recentImages[i].id, buf) && !buf.empty()) {
+                                drawImageFromBuffer(recentImages[i].filename, buf.data(), buf.size());
+                                currentState = STATE_VIEW_IMAGE;
+                                shown = true;
+                            }
+                        }
+
+                        if (!shown) {
+                            drawImageMessage("Gallery", "Image not available offline");
+                            currentState = STATE_VIEW_IMAGE;
+                        }
+                        break;
+                    }
+                    y += 60;
+                }
+                if (ty > h - 60 && tx < 120) {
+                    currentState = STATE_MENU;
+                    drawMenu();
+                }
+            }
+            else if (currentState == STATE_VIEW_SUMMARY || currentState == STATE_VIEW_IMAGE || currentState == STATE_ERROR) {
+                if (ty > h - 60 && tx < 120) {
+                    if (currentState == STATE_VIEW_IMAGE) {
+                        currentState = STATE_GALLERY;
+                        std::vector<String> list;
+                        for (auto img : recentImages) list.push_back(img.filename.length() ? img.filename : String("(image)"));
+                        drawList("Gallery", list.empty() ? std::vector<String>{"(empty)"} : list);
+                    } else {
+                        currentState = STATE_MENU;
+                        drawMenu();
+                    }
                 }
             }
         }

@@ -66,9 +66,46 @@ InfographicResult generateInfographic(const String& summaryText, const String& s
 // UTILITY FUNCTIONS
 // ============================================================================
 
-
-
 /// Get HTTP response code description
 String getHttpCodeDescription(int code);
+
+// ============================================================================
+// LOCAL PROCESSING WORKFLOW
+// ============================================================================
+
+/// Process audio completely on device:
+/// 1. Download audio from Supabase to SD card
+/// 2. Send audio directly to ElevenLabs API for transcription
+/// 3. Save transcript to SD card
+/// 4. Send transcript to Gemini API for summary
+/// 5. Save summary to SD card
+/// 6. Upload results back to Supabase
+/// @param audioId UUID of audio record in Supabase
+/// @return true if entire workflow completed successfully
+bool processAudioLocally(const String& audioId);
+
+/// Save transcript text to local SD card
+/// @param audioId UUID of audio (used for filename)
+/// @param transcriptText Text content to save
+/// @return true if saved successfully
+bool saveTranscriptLocally(const String& audioId, const String& transcriptText);
+
+/// Save summary text to local SD card
+/// @param summaryId UUID of summary (used for filename)
+/// @param summaryText Text content to save
+/// @return true if saved successfully
+bool saveSummaryLocally(const String& summaryId, const String& summaryText);
+
+/// Read transcript from local SD card
+/// @param audioId UUID of audio
+/// @param outText Output string to receive transcript
+/// @return true if read successfully
+bool readTranscriptLocally(const String& audioId, String& outText);
+
+/// Read summary from local SD card
+/// @param summaryId UUID of summary
+/// @param outText Output string to receive summary
+/// @return true if read successfully
+bool readSummaryLocally(const String& summaryId, String& outText);
 
 #endif // API_H
