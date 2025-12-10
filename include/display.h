@@ -57,6 +57,8 @@ enum AppState {
     STATE_LIST_SUMMARIES,
     STATE_VIEW_SUMMARY,
     STATE_GALLERY,
+    STATE_GALLERY_SUMMARIES,
+    STATE_GALLERY_SAVED,
     STATE_VIEW_IMAGE,
     STATE_PROCESSING,
     STATE_ERROR,
@@ -76,6 +78,8 @@ void drawMessage(const String& title, const String& msg);
 void drawList(String title, const std::vector<String>& items);
 void drawTextView(String text);
 void drawGallery(const std::vector<ImageFile>& images);
+void drawSummariesForInfographic(const std::vector<SummaryFile>& summaries);
+void drawInfographicsOnSD(const std::vector<String>& infographics);
 void drawImageMessage(const String& title, const String& message);
 void drawImageFromFile(const String& label, const String& path);
 void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len);

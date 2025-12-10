@@ -132,14 +132,14 @@ const processAudioAsync = async (audioId: string) => {
 
     // Send to Gemini
     const geminiResponse = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `Proporciona un resumen breve en español (2-3 oraciones) del siguiente texto:\n\n${transcription}`,
+              text: `Proporciona un resumen breve en español del siguiente texto:\n\n${transcription}`,
             }],
           }],
         }),
@@ -192,6 +192,31 @@ const processAudioAsync = async (audioId: string) => {
       .from("audio_records")
       .update({ summary_id: summaryRow?.id, status: "done" })
       .eq("id", audioId);
+
+    // Trigger infographic generation in background
+    if (summaryRow?.id) {
+      console.log("[process-audio] Triggering infographic generation for summary:", summaryRow.id);
+      const infographicFunctionUrl = `${supabaseUrl}/functions/v1/generate-infographic`;
+      
+      try {
+        const infographicResponse = await fetch(infographicFunctionUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({ summary_id: summaryRow.id }),
+        });
+        
+        if (infographicResponse.ok) {
+          console.log("[process-audio] Infographic generation triggered successfully");
+        } else {
+          console.warn("[process-audio] Infographic generation request returned:", infographicResponse.status);
+        }
+      } catch (infographicError) {
+        console.warn("[process-audio] Failed to trigger infographic generation:", infographicError);
+      }
+    }
 
     console.log("[process-audio] Complete!");
   } catch (error) {

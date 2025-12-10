@@ -42,6 +42,10 @@ int selectedAudioIndex = -1;
 int selectedSummaryIndex = -1;
 int selectedImageIndex = -1;
 
+// Processing state variables
+String pendingSummaryIdForInfographic = "";
+unsigned long infographicGenerationStartTime = 0;
+
 // Auto-sleep timer
 unsigned long lastActivityTime = 0;
 
@@ -164,14 +168,12 @@ void loop() {
                 // Button 2: GALLERY (View Images)
                 else if (checkButtonPress(tx, ty, menuButtons[2])) {
                     currentState = STATE_GALLERY;
-                    drawProcessing("Fetching images...");
+                    drawProcessing("Loading gallery...");
                     
-                    if (isWiFiConnected() && fetchSupabaseImages(recentImages)) {
-                        drawGalleryList();
-                    } else {
-                        drawError("Failed to fetch images. Check WiFi connection.");
-                        currentState = STATE_ERROR;
-                    }
+                    std::vector<String> options;
+                    options.push_back("Create Infographic");
+                    options.push_back("View Saved");
+                    drawList("Gallery Menu", options);
                 }
                 // Button 3: POWER OFF
                 else if (checkButtonPress(tx, ty, menuButtons[3])) {
@@ -230,10 +232,9 @@ void loop() {
             }
             
             // ================================================================
-            // STATE: PROCESSING (Message display - just waiting for OK)
+            // STATE: PROCESSING (Message display - waiting for user action)
             // ================================================================
             else if (currentState == STATE_PROCESSING) {
-                // Any tap returns to menu
                 int btnW = 100;
                 int btnH = 40;
                 int btnX = (w - btnW) / 2;
@@ -241,8 +242,25 @@ void loop() {
                 
                 // Check if OK button area tapped
                 if (tx >= btnX && tx <= btnX + btnW && ty >= btnY && ty <= btnY + btnH) {
-                    currentState = STATE_MENU;
-                    drawMenu();
+                    // If waiting for infographic, try to download it
+                    if (!pendingSummaryIdForInfographic.isEmpty()) {
+                        drawProcessing("Downloading infographic to SD card...");
+                        String localPath;
+                        
+                        if (isWiFiConnected() && fetchAndSaveInfographicToSD(pendingSummaryIdForInfographic, localPath)) {
+                            drawImageFromFile("Infographic", localPath);
+                            currentState = STATE_VIEW_IMAGE;
+                            selectedImageIndex = 1; // Mark as coming from processing
+                            pendingSummaryIdForInfographic = "";
+                        } else {
+                            drawError("Failed to download infographic. Check WiFi and try again.");
+                            currentState = STATE_ERROR;
+                            pendingSummaryIdForInfographic = "";
+                        }
+                    } else {
+                        currentState = STATE_MENU;
+                        drawMenu();
+                    }
                 }
             }
             
@@ -315,56 +333,127 @@ void loop() {
             // STATE: GALLERY
             // ================================================================
             else if (currentState == STATE_GALLERY) {
-                // Check list items (using new LIST_ITEM_HEIGHT)
                 int startY = STATUS_BAR_HEIGHT + 70;
                 bool itemSelected = false;
                 
-                for (size_t i = 0; i < recentImages.size(); i++) {
+                // Gallery menu has 2 options: Create Infographic, View Saved
+                for (size_t i = 0; i < 2; i++) {
                     int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
                     if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
                         itemSelected = true;
                         
-                        ImageFile& selected = recentImages[i];
-                        bool shown = false;
-                        String localPath = "/sd/" + (selected.filename.length() > 0 ? selected.filename : ("gallery_" + selected.id + ".png"));
-                        
-                        // Try SD cache with download if needed
-                        if (storage.activeStorage == STORAGE_SD) {
-                            if (!SD.exists(localPath) && isWiFiConnected() && !selected.id.isEmpty()) {
-                                drawProcessing("Downloading image...");
-                                downloadImageFromSupabase(selected.id, localPath, selected.filename);
+                        if (i == 0) {
+                            // Create Infographic: fetch summaries
+                            currentState = STATE_GALLERY_SUMMARIES;
+                            drawProcessing("Fetching summaries...");
+                            
+                            if (isWiFiConnected() && fetchSupabaseSummaries(recentSummaries)) {
+                                drawSummariesForInfographic(recentSummaries);
+                            } else {
+                                drawError("Failed to fetch summaries. Check WiFi connection.");
+                                currentState = STATE_ERROR;
                             }
-                            if (SD.exists(localPath)) {
-                                drawImageFromFile(selected.filename, localPath);
-                                currentState = STATE_VIEW_IMAGE;
-                                shown = true;
-                            }
-                        }
-                        
-                        // If not cached, fetch to buffer
-                        if (!shown && isWiFiConnected() && !selected.id.isEmpty()) {
-                            drawProcessing("Loading image...");
-                            std::vector<uint8_t> buf;
-                            if (fetchImageToBuffer(selected.id, buf) && !buf.empty()) {
-                                drawImageFromBuffer(selected.filename, buf.data(), buf.size());
-                                currentState = STATE_VIEW_IMAGE;
-                                shown = true;
-                            }
-                        }
-                        
-                        if (!shown) {
-                            drawImageMessage("Gallery", "Image not available offline");
-                            currentState = STATE_VIEW_IMAGE;
+                        } else {
+                            // View Saved: list SD card infographics
+                            currentState = STATE_GALLERY_SAVED;
+                            std::vector<String> savedInfographics;
+                            listInfographicsOnSD(savedInfographics);
+                            drawInfographicsOnSD(savedInfographics);
                         }
                         break;
                     }
                 }
                 
-                // Back button (new position)
+                // Back button
                 int backBtnY = SCREEN_HEIGHT - 70;
                 if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                     currentState = STATE_MENU;
                     drawMenu();
+                }
+            }
+            
+            // ================================================================
+            // STATE: GALLERY_SUMMARIES (Select summary to generate infographic)
+            // ================================================================
+            else if (currentState == STATE_GALLERY_SUMMARIES) {
+                int startY = STATUS_BAR_HEIGHT + 70;
+                bool itemSelected = false;
+                
+                for (size_t i = 0; i < recentSummaries.size(); i++) {
+                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
+                        itemSelected = true;
+                        
+                        SummaryFile& selected = recentSummaries[i];
+                        if (selected.id.isEmpty()) {
+                            drawError("Invalid summary ID");
+                            currentState = STATE_ERROR;
+                        } else {
+                            drawProcessing("Triggering infographic generation...");
+                            
+                            if (triggerGenerateInfographic(selected.id)) {
+                                pendingSummaryIdForInfographic = selected.id;
+                                infographicGenerationStartTime = millis();
+                                drawMessage("Infographic Generating", 
+                                    "Cloud processing started. Check back in 30-40 seconds to view.");
+                                currentState = STATE_PROCESSING;
+                            } else {
+                                drawError("Failed to trigger infographic generation.");
+                                currentState = STATE_ERROR;
+                            }
+                        }
+                        break;
+                    }
+                }
+                
+                // Back button
+                int backBtnY = SCREEN_HEIGHT - 70;
+                if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
+                    currentState = STATE_GALLERY;
+                    std::vector<String> options;
+                    options.push_back("Create Infographic");
+                    options.push_back("View Saved");
+                    drawList("Gallery Menu", options);
+                }
+            }
+            
+            // ================================================================
+            // STATE: GALLERY_SAVED (View saved infographics on SD)
+            // ================================================================
+            else if (currentState == STATE_GALLERY_SAVED) {
+                int startY = STATUS_BAR_HEIGHT + 70;
+                bool itemSelected = false;
+                
+                std::vector<String> savedInfographics;
+                listInfographicsOnSD(savedInfographics);
+                
+                for (size_t i = 0; i < savedInfographics.size(); i++) {
+                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
+                        itemSelected = true;
+                        
+                        String filename = savedInfographics[i];
+                        String localPath = "/infographics/" + filename;
+                        
+                        if (SD.exists(localPath)) {
+                            drawImageFromFile(filename, localPath);
+                            currentState = STATE_VIEW_IMAGE;
+                        } else {
+                            drawError("File not found on SD card");
+                            currentState = STATE_ERROR;
+                        }
+                        break;
+                    }
+                }
+                
+                // Back button
+                int backBtnY = SCREEN_HEIGHT - 70;
+                if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
+                    currentState = STATE_GALLERY;
+                    std::vector<String> options;
+                    options.push_back("Create Infographic");
+                    options.push_back("View Saved");
+                    drawList("Gallery Menu", options);
                 }
             }
             
@@ -384,8 +473,19 @@ void loop() {
                     int backBtnY = SCREEN_HEIGHT - 70;
                     if (ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                         if (currentState == STATE_VIEW_IMAGE) {
-                            currentState = STATE_GALLERY;
-                            drawGalleryList();
+                            // Determine where to go back based on previous state
+                            if (selectedImageIndex >= 0) {
+                                currentState = STATE_GALLERY_SAVED;
+                                std::vector<String> savedInfographics;
+                                listInfographicsOnSD(savedInfographics);
+                                drawInfographicsOnSD(savedInfographics);
+                            } else {
+                                currentState = STATE_GALLERY;
+                                std::vector<String> options;
+                                options.push_back("Create Infographic");
+                                options.push_back("View Saved");
+                                drawList("Gallery Menu", options);
+                            }
                         } else {
                             currentState = STATE_MENU;
                             drawMenu();

@@ -169,3 +169,29 @@ bool isSummaryCached(const String& summaryId) {
     if (!storage.sdAvailable) return false;
     return SD.exists(getSummaryCachePath(summaryId));
 }
+
+void listInfographicsOnSD(std::vector<String>& infographics) {
+    infographics.clear();
+    if (!storage.sdAvailable) return;
+    
+    File folder = SD.open("/infographics");
+    if (!folder || !folder.isDirectory()) {
+        Serial.println("[STORAGE] Cannot open infographics folder");
+        if (folder) folder.close();
+        return;
+    }
+    
+    File file = folder.openNextFile();
+    while (file) {
+        if (!file.isDirectory()) {
+            String filename = file.name();
+            if (filename.endsWith(".png")) {
+                infographics.push_back(filename);
+                Serial.printf("[STORAGE] Found infographic: %s\n", filename.c_str());
+            }
+        }
+        file = folder.openNextFile();
+    }
+    
+    folder.close();
+}

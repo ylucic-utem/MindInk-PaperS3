@@ -317,3 +317,58 @@ bool triggerProcessAudio(const String& audioId) {
     http.end();
     return code == 200 || code == 202;
 }
+
+bool triggerGenerateInfographic(const String& summaryId) {
+    if (!SUPABASE_URL || !SUPABASE_EDGE_TOKEN) return false;
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    String url = String(SUPABASE_URL) + "/functions/v1/generate-infographic";
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + String(SUPABASE_EDGE_TOKEN));
+    StaticJsonDocument<128> body;
+    body["summary_id"] = summaryId;
+    String payload;
+    serializeJson(body, payload);
+    int code = http.POST(payload);
+    http.end();
+    return code == 200 || code == 202;
+}
+
+bool fetchAndSaveInfographicToSD(const String& summaryId, String& localPath) {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
+    
+    // Query infographics table for entry with this summary_id
+    String url = String(SUPABASE_URL) + "/rest/v1/infographics?select=id,image_file_name,storage_path&summary_id=eq." + summaryId + "&limit=1";
+    DynamicJsonDocument doc(2048);
+    
+    if (!getJson(url, SUPABASE_ANON_KEY, doc)) {
+        Serial.println("[SUPABASE] Failed to query infographics table");
+        return false;
+    }
+    
+    if (!doc.is<JsonArray>() || doc.as<JsonArray>().size() == 0) {
+        Serial.println("[SUPABASE] No infographic found for summary");
+        return false;
+    }
+    
+    JsonObject obj = doc.as<JsonArray>()[0];
+    String imageId = obj["id"].as<String>();
+    String imageName = obj["image_file_name"].as<String>();
+    
+    if (imageId.isEmpty()) {
+        Serial.println("[SUPABASE] Invalid infographic ID");
+        return false;
+    }
+    
+    // Download using signed URL
+    String signedUrl = callSignedUrl("signed-image", imageId);
+    if (signedUrl.isEmpty()) {
+        Serial.println("[SUPABASE] Failed to get signed URL");
+        return false;
+    }
+    
+    localPath = "/infographics/" + imageName;
+    return downloadToSD(signedUrl, localPath);
+}

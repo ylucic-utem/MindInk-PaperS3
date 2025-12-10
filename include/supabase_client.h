@@ -35,4 +35,10 @@ bool fetchImageToBuffer(const String& imageId, std::vector<uint8_t>& outBuf);
 // Trigger processing pipeline (Edge Function)
 bool triggerProcessAudio(const String& audioId);
 
+// Trigger infographic generation for a summary
+bool triggerGenerateInfographic(const String& summaryId);
+
+// Fetch infographic for a summary and save to SD card
+bool fetchAndSaveInfographicToSD(const String& summaryId, String& localPath);
+
 #endif // SUPABASE_CLIENT_H

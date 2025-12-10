@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
 
     // Generate signed URL for the image file
     const { data: signedUrlData, error: urlError } = await supabase.storage
-      .from("infographics")
+      .from("gallery-images")
       .createSignedUrl(image.storage_path, 3600); // 1 hour expiry
 
     if (urlError || !signedUrlData) {

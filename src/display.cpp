@@ -2,6 +2,8 @@
 #include "storage.h"
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <FS.h>
+#include <SD.h>
 
 // ============================================================================
 // DISPLAY STATE
@@ -276,6 +278,7 @@ void displayStatusBar() {
 
 void drawMenu() {
     M5.Display.startWrite();
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
@@ -298,6 +301,7 @@ void drawMenu() {
     M5.Display.drawCenterString(info, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 30);
     M5.Display.setFont(nullptr);
     M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawList(String title, const std::vector<String>& items) {
@@ -335,6 +339,7 @@ void drawList(String title, const std::vector<String>& items) {
     
     M5.Display.setFont(nullptr);
     M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawTextView(String text) {
@@ -374,6 +379,36 @@ void drawGallery(const std::vector<ImageFile>& images) {
     M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
 }
 
+void drawSummariesForInfographic(const std::vector<SummaryFile>& summaries) {
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.drawCenterString("Create Infographic", M5.Display.width()/2, 50);
+    M5.Display.setTextSize(1);
+    M5.Display.drawString("Tap a summary:", PADDING_MEDIUM, 90);
+    
+    drawList("", summaries.empty() ? std::vector<String>{"(No summaries available)"} : 
+        [&summaries]() {
+            std::vector<String> items;
+            for(const auto& s : summaries) {
+                items.push_back(s.filename);
+            }
+            return items;
+        }());
+}
+
+void drawInfographicsOnSD(const std::vector<String>& infographics) {
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.drawCenterString("Saved Infographics", M5.Display.width()/2, 50);
+    M5.Display.setTextSize(1);
+    
+    drawList("", infographics.empty() ? std::vector<String>{"(No saved infographics)"} : infographics);
+}
+
 void drawImageMessage(const String& title, const String& message) {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
@@ -390,27 +425,42 @@ void drawImageMessage(const String& title, const String& message) {
 void drawImageFromFile(const String& label, const String& path) {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
-    M5.Display.setTextSize(1);
+    
+    // Only show label if it's not just a filename
+    if (!label.isEmpty() && !label.startsWith("infographic-")) {
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.setTextSize(2);
+        M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
+    }
 
     bool drawn = false;
+    
+    // Use filename-only overloads; M5GFX handles SD internally
+    // Display handles dithering automatically when in EPD mode
+    int rc = -1;
     if (path.endsWith(".png")) {
-        M5.Display.drawPngFile(path.c_str(), 0, 60);
-        drawn = true;
+        rc = M5.Display.drawPngFile(path.c_str(), 0, STATUS_BAR_HEIGHT);
+        drawn = (rc == 0);
     } else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
-        M5.Display.drawJpgFile(path.c_str(), 0, 60);
-        drawn = true;
+        rc = M5.Display.drawJpgFile(path.c_str(), 0, STATUS_BAR_HEIGHT);
+        drawn = (rc == 0);
     }
 
     if (!drawn) {
-        M5.Display.drawCenterString("Unsupported image format", M5.Display.width()/2, M5.Display.height()/2);
+        M5.Display.setTextSize(1);
+        M5.Display.drawCenterString("Unable to load image", M5.Display.width()/2, M5.Display.height()/2 - 20);
+        M5.Display.drawCenterString("Format: " + path.substring(path.lastIndexOf('.')), M5.Display.width()/2, M5.Display.height()/2);
+        M5.Display.drawCenterString("RC: " + String(rc), M5.Display.width()/2, M5.Display.height()/2 + 20);
     }
 
+    // Draw BACK button at bottom
     M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
     M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+
+    M5.Display.endWrite();
+    // Force refresh on e-ink
+    M5.Display.display();
 }
 
 void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
@@ -422,6 +472,7 @@ void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
     M5.Display.setTextSize(1);
 
     // Attempt PNG first; fall back to JPG.
+    // Both formats will be dithered automatically by M5Unified for e-ink displays
     bool drawn = false;
     if (M5.Display.drawPng(data, len, 0, 60) == 0) {
         drawn = true;
@@ -433,6 +484,7 @@ void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
         M5.Display.drawCenterString("Unable to render image", M5.Display.width()/2, M5.Display.height()/2);
     }
 
+    // Draw BACK button
     M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
     M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);

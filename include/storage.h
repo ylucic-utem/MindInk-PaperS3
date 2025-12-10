@@ -112,4 +112,8 @@ bool isTranscriptCached(const String& audioId);
 /// Check if summary is cached locally
 bool isSummaryCached(const String& summaryId);
 
+/// List infographic files on SD card
+/// @param infographics Vector to populate with found files
+void listInfographicsOnSD(std::vector<String>& infographics);
+
 #endif // STORAGE_H
