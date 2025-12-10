@@ -20,3 +20,4 @@ credentials.txt
 *.swo
 *~
 
+.env.example
