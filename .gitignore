@@ -21,3 +21,5 @@ credentials.txt
 *~
 
 .env.example
+MD/
+EXTRAS/
