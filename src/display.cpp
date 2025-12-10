@@ -150,21 +150,62 @@ String EbookReader::getCurrentPageText() {
     return "";
 }
 
+void EbookReader::increaseFontSize() {
+    if (fontSize < 3) {
+        fontSize++;
+        recalculateLayout();
+    }
+}
+
+void EbookReader::decreaseFontSize() {
+    if (fontSize > 0) {
+        fontSize--;
+        recalculateLayout();
+    }
+}
+
+void EbookReader::recalculateLayout() {
+    // Adjust lines per page and chars per line based on font size
+    // fontSize: 0=16pt, 1=20pt, 2=24pt, 3=28pt
+    switch (fontSize) {
+        case 0: linesPerPage = 14; charsPerLine = 42; break;  // 16pt - most text
+        case 1: linesPerPage = 11; charsPerLine = 35; break;  // 20pt - default
+        case 2: linesPerPage = 9;  charsPerLine = 30; break;  // 24pt - larger
+        case 3: linesPerPage = 7;  charsPerLine = 25; break;  // 28pt - very large
+    }
+    
+    // Remember current position and re-paginate
+    int oldPage = currentPage;
+    paginateText();
+    
+    // Try to stay at approximately the same position
+    if (oldPage >= totalPages) {
+        currentPage = totalPages > 0 ? totalPages - 1 : 0;
+    } else {
+        currentPage = oldPage;
+    }
+}
+
 // ============================================================================
 // UI SETUP
 // ============================================================================
 
 void setupButtons() {
     menuButtons.clear();
-    // New 4-button layout for Cloud Remote & Viewer
-    Button btn1 = {50, 100, 200, 80, "AUDIO FILES"};      // Remote Trigger
+    // 5-button layout with larger touch targets (MENU_BTN_WIDTH x MENU_BTN_HEIGHT)
+    // Row 1: y = 200
+    Button btn1 = {40, 200, MENU_BTN_WIDTH, MENU_BTN_HEIGHT, "AUDIO FILES"};
     menuButtons.push_back(btn1);
-    Button btn2 = {300, 100, 200, 80, "SUMMARIES"};       // View Text
+    Button btn2 = {40 + MENU_BTN_WIDTH + 20, 200, MENU_BTN_WIDTH, MENU_BTN_HEIGHT, "SUMMARIES"};
     menuButtons.push_back(btn2);
-    Button btn3 = {50, 220, 200, 80, "GALLERY"};          // View Images
+    // Row 2: y = 200 + MENU_BTN_HEIGHT + 30 = 350
+    Button btn3 = {40, 350, MENU_BTN_WIDTH, MENU_BTN_HEIGHT, "GALLERY"};
     menuButtons.push_back(btn3);
-    Button btn4 = {300, 220, 200, 80, "POWER"};           // Power Options
+    Button btn4 = {40 + MENU_BTN_WIDTH + 20, 350, MENU_BTN_WIDTH, MENU_BTN_HEIGHT, "POWER OFF"};
     menuButtons.push_back(btn4);
+    // Row 3: Deep Sleep button centered, y = 500
+    Button btn5 = {(SCREEN_WIDTH - MENU_BTN_WIDTH) / 2, 500, MENU_BTN_WIDTH, MENU_BTN_HEIGHT, "DEEP SLEEP"};
+    menuButtons.push_back(btn5);
 }
 
 bool checkButtonPress(int x, int y, const Button& btn) {
@@ -172,27 +213,61 @@ bool checkButtonPress(int x, int y, const Button& btn) {
 }
 
 void drawButton(const Button& btn) {
-    // Draw double border (no background fill)
-    M5.Display.drawRect(btn.x, btn.y, btn.w, btn.h, TFT_BLACK);
-    M5.Display.drawRect(btn.x + 2, btn.y + 2, btn.w - 4, btn.h - 4, TFT_BLACK);
+    // Draw rounded rectangle border (no background fill, e-ink optimized)
+    M5.Display.drawRoundRect(btn.x, btn.y, btn.w, btn.h, MENU_BTN_RADIUS, TFT_BLACK);
+    M5.Display.drawRoundRect(btn.x + 2, btn.y + 2, btn.w - 4, btn.h - 4, MENU_BTN_RADIUS - 2, TFT_BLACK);
     
-    // Draw text centered on white background
+    // Draw text centered with larger font
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(1);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
     M5.Display.drawCenterString(btn.label, btn.x + btn.w/2, btn.y + btn.h/2 - 8);
+    M5.Display.setFont(nullptr); // Reset to default
 }
 
 void displayStatusBar() {
-    M5.Display.fillRect(0, 0, M5.Display.width(), 30, TFT_BLACK);
+    // Draw status bar background (50px height)
+    M5.Display.fillRect(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT, TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.setTextSize(1);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
     
-    String wifiStatus = WiFi.status() == WL_CONNECTED ? "WiFi: ON" : "WiFi: OFF";
-    M5.Display.drawString(wifiStatus, 10, 8);
+    // WiFi status indicator (left side)
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    String wifiStr = wifiConnected ? "WiFi" : "No WiFi";
+    M5.Display.drawString(wifiStr, PADDING_MEDIUM, 15);
     
-    String storageStatus = storage.activeStorage == STORAGE_SD ? "SD" : 
-                          (storage.activeStorage == STORAGE_PSRAM ? "PSRAM" : "NONE");
-    M5.Display.drawString("Storage: " + storageStatus, 150, 8);
+    // WiFi signal bars (simple representation)
+    int barX = 80;
+    int barY = 35;
+    if (wifiConnected) {
+        int rssi = WiFi.RSSI();
+        int bars = (rssi > -50) ? 4 : (rssi > -60) ? 3 : (rssi > -70) ? 2 : 1;
+        for (int i = 0; i < bars; i++) {
+            M5.Display.fillRect(barX + i * 8, barY - (i + 1) * 4, 5, (i + 1) * 4, TFT_WHITE);
+        }
+    }
+    
+    // Battery percentage (center-right)
+    int batteryLevel = M5.Power.getBatteryLevel();
+    String batteryStr = String(batteryLevel) + "%";
+    M5.Display.drawString(batteryStr, SCREEN_WIDTH / 2 + 60, 15);
+    
+    // Battery icon
+    int batX = SCREEN_WIDTH / 2 + 110;
+    int batY = 15;
+    M5.Display.drawRect(batX, batY, 30, 16, TFT_WHITE);
+    M5.Display.fillRect(batX + 30, batY + 4, 4, 8, TFT_WHITE);
+    int fillWidth = (batteryLevel * 26) / 100;
+    M5.Display.fillRect(batX + 2, batY + 2, fillWidth, 12, TFT_WHITE);
+    
+    // Storage indicator (right side)
+    String storageStr = storage.activeStorage == STORAGE_SD ? "SD" : 
+                        (storage.activeStorage == STORAGE_PSRAM ? "RAM" : "--");
+    M5.Display.drawRightString(storageStr, SCREEN_WIDTH - PADDING_MEDIUM, 15);
+    
+    // Bottom separator line
+    M5.Display.drawLine(0, STATUS_BAR_HEIGHT - 1, SCREEN_WIDTH, STATUS_BAR_HEIGHT - 1, TFT_DARKGREY);
+    
+    M5.Display.setFont(nullptr); // Reset font
 }
 
 // ============================================================================
@@ -204,41 +279,62 @@ void drawMenu() {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
+    // Title with large font
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("MindInk", M5.Display.width()/2, 50);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString("MindInk", SCREEN_WIDTH / 2, STATUS_BAR_HEIGHT + 40);
+    M5.Display.setFont(nullptr);
     
+    // Draw all menu buttons
     for (const auto& btn : menuButtons) {
         drawButton(btn);
     }
     
-    M5.Display.setTextSize(1);
+    // Footer info
+    M5.Display.setFont(&fonts::lgfxJapanGothic_12);
     M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
     String info = storage.activeStorage == STORAGE_SD ? "Storage: SD Card" : 
                   (storage.activeStorage == STORAGE_PSRAM ? "Storage: PSRAM" : "Storage: None");
-    M5.Display.drawCenterString(info, M5.Display.width()/2, M5.Display.height() - 20);
+    M5.Display.drawCenterString(info, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 30);
+    M5.Display.setFont(nullptr);
     M5.Display.endWrite();
 }
 
 void drawList(String title, const std::vector<String>& items) {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
+    // Title
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString(title, M5.Display.width()/2, 50);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString(title, SCREEN_WIDTH / 2, STATUS_BAR_HEIGHT + 20);
     
-    M5.Display.setTextSize(1);
-    int y = 100;
-    for (size_t i = 0; i < items.size(); i++) {
-        M5.Display.drawRect(20, y, M5.Display.width() - 40, 50, TFT_BLACK);
-        M5.Display.drawString(items[i], 30, y + 15);
-        y += 60;
+    // List items with larger height and font
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    int startY = STATUS_BAR_HEIGHT + 70;
+    int maxItems = (SCREEN_HEIGHT - startY - 80) / (LIST_ITEM_HEIGHT + PADDING_SMALL);
+    
+    for (size_t i = 0; i < items.size() && (int)i < maxItems; i++) {
+        int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+        
+        // Rounded rectangle for list item
+        M5.Display.drawRoundRect(PADDING_MEDIUM, y, SCREEN_WIDTH - 2 * PADDING_MEDIUM, LIST_ITEM_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+        
+        // Item text vertically centered
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.drawString(items[i], PADDING_LARGE, y + (LIST_ITEM_HEIGHT - 16) / 2);
     }
     
-    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    // Back button (larger)
+    int backBtnY = SCREEN_HEIGHT - 70;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + (NAV_BTN_HEIGHT - 16) / 2);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
 }
 
 void drawTextView(String text) {
@@ -459,85 +555,244 @@ void drawEbookPage() {
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
-    // Title bar
+    // Title bar with larger font
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(1);
-    M5.Display.drawString("Summary", 20, 40);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.drawString("Resumen", PADDING_MEDIUM, STATUS_BAR_HEIGHT + 15);
     
-    // Page indicator
-    String pageInfo = "Page " + String(ebookReader.currentPage + 1) + " / " + String(ebookReader.totalPages);
-    M5.Display.drawRightString(pageInfo, M5.Display.width() - 20, 40);
+    // Page indicator and font size indicator
+    String pageInfo = String(ebookReader.currentPage + 1) + "/" + String(ebookReader.totalPages);
+    M5.Display.drawRightString(pageInfo, SCREEN_WIDTH - PADDING_MEDIUM, STATUS_BAR_HEIGHT + 15);
     
     // Draw horizontal line separator
-    M5.Display.drawLine(20, 60, M5.Display.width() - 20, 60, TFT_BLACK);
+    int separatorY = STATUS_BAR_HEIGHT + 45;
+    M5.Display.drawLine(PADDING_MEDIUM, separatorY, SCREEN_WIDTH - PADDING_MEDIUM, separatorY, TFT_BLACK);
     
-    // Text content area (monospace font for consistent wrapping)
+    // Text content area
+    int textStartY = separatorY + 15;
+    int textAreaHeight = SCREEN_HEIGHT - textStartY - 80; // Leave room for nav buttons
+    
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setFont(&fonts::Font0); // Use default monospace font
-    M5.Display.setCursor(20, 75);
     
+    // Select font based on fontSize level (0=16pt, 1=20pt, 2=24pt, 3=28pt)
+    int lineHeight;
+    switch (ebookReader.fontSize) {
+        case 0:
+            M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+            lineHeight = 24;
+            break;
+        case 1:
+            M5.Display.setFont(&fonts::lgfxJapanGothic_20);
+            lineHeight = 30;
+            break;
+        case 2:
+            M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+            lineHeight = 36;
+            break;
+        case 3:
+        default:
+            M5.Display.setFont(&fonts::lgfxJapanGothic_28);
+            lineHeight = 42;
+            break;
+    }
+    
+    // Get page text and render with line wrapping
     String pageText = ebookReader.getCurrentPageText();
-    M5.Display.print(pageText);
+    
+    // Render text line by line with proper spacing
+    int cursorY = textStartY;
+    int lineStart = 0;
+    
+    for (int i = 0; i <= (int)pageText.length(); i++) {
+        if (i == (int)pageText.length() || pageText.charAt(i) == '\n') {
+            String line = pageText.substring(lineStart, i);
+            M5.Display.drawString(line, PADDING_LARGE, cursorY);
+            cursorY += lineHeight;
+            lineStart = i + 1;
+            
+            if (cursorY > textStartY + textAreaHeight) break;
+        }
+    }
     
     // Navigation buttons at bottom
-    int btnY = M5.Display.height() - 60;
-    int btnH = 45;
-    int btnW = 100;
-    int centerBtnW = 100;
+    int btnY = SCREEN_HEIGHT - 70;
+    int smallBtnW = 60;  // Smaller width for A+/A- buttons
     
-    // Previous button (left)
+    // Previous button (far left)
     if (ebookReader.hasPrevPage()) {
-        M5.Display.fillRect(20, btnY, btnW, btnH, TFT_LIGHTGREY);
-        M5.Display.drawRect(20, btnY, btnW, btnH, TFT_BLACK);
+        M5.Display.fillRoundRect(PADDING_MEDIUM, btnY, NAV_BTN_WIDTH - 20, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+        M5.Display.drawRoundRect(PADDING_MEDIUM, btnY, NAV_BTN_WIDTH - 20, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
         M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-        M5.Display.drawCenterString("< PREV", 20 + btnW/2, btnY + btnH/2 - 5);
+        M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+        M5.Display.drawCenterString("< PREV", PADDING_MEDIUM + (NAV_BTN_WIDTH - 20) / 2, btnY + (NAV_BTN_HEIGHT - 16) / 2);
     }
+    
+    // A- button (decrease font)
+    int aMinusBtnX = PADDING_MEDIUM + NAV_BTN_WIDTH - 10;
+    M5.Display.fillRoundRect(aMinusBtnX, btnY, smallBtnW, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(aMinusBtnX, btnY, smallBtnW, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.drawCenterString("A-", aMinusBtnX + smallBtnW / 2, btnY + (NAV_BTN_HEIGHT - 16) / 2);
     
     // Back button (center)
-    int backBtnX = (M5.Display.width() - centerBtnW) / 2;
-    M5.Display.fillRect(backBtnX, btnY, centerBtnW, btnH, TFT_DARKGREY);
-    M5.Display.drawRect(backBtnX, btnY, centerBtnW, btnH, TFT_BLACK);
+    int backBtnX = (SCREEN_WIDTH - 80) / 2;
+    M5.Display.fillRoundRect(backBtnX, btnY, 80, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_DARKGREY);
+    M5.Display.drawRoundRect(backBtnX, btnY, 80, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
     M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREY);
-    M5.Display.drawCenterString("BACK", backBtnX + centerBtnW/2, btnY + btnH/2 - 5);
+    M5.Display.drawCenterString("BACK", backBtnX + 40, btnY + (NAV_BTN_HEIGHT - 16) / 2);
     
-    // Next button (right)
+    // A+ button (increase font)
+    int aPlusBtnX = backBtnX + 80 + 10;
+    M5.Display.fillRoundRect(aPlusBtnX, btnY, smallBtnW, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(aPlusBtnX, btnY, smallBtnW, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("A+", aPlusBtnX + smallBtnW / 2, btnY + (NAV_BTN_HEIGHT - 16) / 2);
+    
+    // Next button (far right)
     if (ebookReader.hasNextPage()) {
-        int nextBtnX = M5.Display.width() - 20 - btnW;
-        M5.Display.fillRect(nextBtnX, btnY, btnW, btnH, TFT_LIGHTGREY);
-        M5.Display.drawRect(nextBtnX, btnY, btnW, btnH, TFT_BLACK);
+        int nextBtnX = SCREEN_WIDTH - PADDING_MEDIUM - (NAV_BTN_WIDTH - 20);
+        M5.Display.fillRoundRect(nextBtnX, btnY, NAV_BTN_WIDTH - 20, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+        M5.Display.drawRoundRect(nextBtnX, btnY, NAV_BTN_WIDTH - 20, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
         M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-        M5.Display.drawCenterString("NEXT >", nextBtnX + btnW/2, btnY + btnH/2 - 5);
+        M5.Display.drawCenterString("NEXT >", nextBtnX + (NAV_BTN_WIDTH - 20) / 2, btnY + (NAV_BTN_HEIGHT - 16) / 2);
     }
     
+    M5.Display.setFont(nullptr);
     M5.Display.endWrite();
 }
 
 bool handleEbookTouch(int x, int y) {
-    int btnY = M5.Display.height() - 60;
-    int btnH = 45;
-    int btnW = 100;
-    int centerBtnW = 100;
+    int btnY = SCREEN_HEIGHT - 70;
+    int smallBtnW = 60;
+    int prevBtnW = NAV_BTN_WIDTH - 20;
+    int backBtnW = 80;
+    int nextBtnW = NAV_BTN_WIDTH - 20;
     
-    // Check Previous button
-    if (ebookReader.hasPrevPage() && x >= 20 && x <= 20 + btnW && y >= btnY && y <= btnY + btnH) {
+    // Check Previous button (far left)
+    if (ebookReader.hasPrevPage() && x >= PADDING_MEDIUM && x <= PADDING_MEDIUM + prevBtnW && y >= btnY && y <= btnY + NAV_BTN_HEIGHT) {
         ebookReader.prevPage();
         drawEbookPage();
         return true;
     }
     
-    // Check Back button
-    int backBtnX = (M5.Display.width() - centerBtnW) / 2;
-    if (x >= backBtnX && x <= backBtnX + centerBtnW && y >= btnY && y <= btnY + btnH) {
+    // A- button (decrease font)
+    int aMinusBtnX = PADDING_MEDIUM + NAV_BTN_WIDTH - 10;
+    if (x >= aMinusBtnX && x <= aMinusBtnX + smallBtnW && y >= btnY && y <= btnY + NAV_BTN_HEIGHT) {
+        ebookReader.decreaseFontSize();
+        drawEbookPage();
+        return true;
+    }
+    
+    // Check Back button (center)
+    int backBtnX = (SCREEN_WIDTH - backBtnW) / 2;
+    if (x >= backBtnX && x <= backBtnX + backBtnW && y >= btnY && y <= btnY + NAV_BTN_HEIGHT) {
         return false; // Signal to exit ebook view
     }
     
-    // Check Next button
-    int nextBtnX = M5.Display.width() - 20 - btnW;
-    if (ebookReader.hasNextPage() && x >= nextBtnX && x <= nextBtnX + btnW && y >= btnY && y <= btnY + btnH) {
+    // A+ button (increase font)
+    int aPlusBtnX = backBtnX + backBtnW + 10;
+    if (x >= aPlusBtnX && x <= aPlusBtnX + smallBtnW && y >= btnY && y <= btnY + NAV_BTN_HEIGHT) {
+        ebookReader.increaseFontSize();
+        drawEbookPage();
+        return true;
+    }
+    
+    // Check Next button (far right)
+    int nextBtnX = SCREEN_WIDTH - PADDING_MEDIUM - nextBtnW;
+    if (ebookReader.hasNextPage() && x >= nextBtnX && x <= nextBtnX + nextBtnW && y >= btnY && y <= btnY + NAV_BTN_HEIGHT) {
         ebookReader.nextPage();
         drawEbookPage();
         return true;
     }
     
     return true; // Stay in ebook view
+}
+
+// ============================================================================
+// DEEP SLEEP SCREENS
+// ============================================================================
+
+void drawDeepSleepConfirm() {
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    
+    // Title
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString("Enter Deep Sleep?", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 100);
+    
+    // Description
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+    M5.Display.drawCenterString("Press physical button to wake", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 40);
+    
+    // YES button
+    int btnY = SCREEN_HEIGHT / 2 + 30;
+    int btnSpacing = 30;
+    
+    M5.Display.fillRoundRect(SCREEN_WIDTH / 2 - MENU_BTN_WIDTH - btnSpacing / 2, btnY, MENU_BTN_WIDTH, 80, MENU_BTN_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(SCREEN_WIDTH / 2 - MENU_BTN_WIDTH - btnSpacing / 2, btnY, MENU_BTN_WIDTH, 80, MENU_BTN_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("YES", SCREEN_WIDTH / 2 - MENU_BTN_WIDTH / 2 - btnSpacing / 2, btnY + 32);
+    
+    // CANCEL button
+    M5.Display.fillRoundRect(SCREEN_WIDTH / 2 + btnSpacing / 2, btnY, MENU_BTN_WIDTH, 80, MENU_BTN_RADIUS, TFT_DARKGREY);
+    M5.Display.drawRoundRect(SCREEN_WIDTH / 2 + btnSpacing / 2, btnY, MENU_BTN_WIDTH, 80, MENU_BTN_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREY);
+    M5.Display.drawCenterString("CANCEL", SCREEN_WIDTH / 2 + MENU_BTN_WIDTH / 2 + btnSpacing / 2, btnY + 32);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+}
+
+void drawDeepSleepScreen() {
+    // Full refresh before sleep (anti-ghosting)
+    M5.Display.fillScreen(TFT_BLACK);
+    delay(100);
+    M5.Display.fillScreen(TFT_WHITE);
+    
+    // Display "MindInk" centered
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString("MindInk", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20);
+    M5.Display.setFont(nullptr);
+}
+
+// ============================================================================
+// ANTI-GHOSTING
+// ============================================================================
+
+// Global variables for anti-ghosting
+static unsigned long lastFullRefresh = 0;
+
+void forceFullRefresh() {
+    // Flash screen black then white to clear ghosting
+    M5.Display.fillScreen(TFT_BLACK);
+    delay(50);
+    M5.Display.fillScreen(TFT_WHITE);
+    delay(50);
+    lastFullRefresh = millis();
+}
+
+void checkAndRefresh() {
+    unsigned long now = millis();
+    if (now - lastFullRefresh > GHOST_REFRESH_INTERVAL) {
+        // Perform anti-ghosting refresh
+        forceFullRefresh();
+        
+        // Redraw current screen based on state
+        switch (currentState) {
+            case STATE_MENU:
+                drawMenu();
+                break;
+            case STATE_VIEW_SUMMARY:
+                drawEbookPage();
+                break;
+            // Other states will be redrawn when next action occurs
+            default:
+                break;
+        }
+    }
 }

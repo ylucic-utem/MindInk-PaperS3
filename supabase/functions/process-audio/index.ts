@@ -139,7 +139,7 @@ const processAudioAsync = async (audioId: string) => {
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `Provide a brief summary (2-3 sentences) of:\n\n${transcription}`,
+              text: `Proporciona un resumen breve en español (2-3 oraciones) del siguiente texto:\n\n${transcription}`,
             }],
           }],
         }),

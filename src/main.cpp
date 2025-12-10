@@ -42,6 +42,9 @@ int selectedAudioIndex = -1;
 int selectedSummaryIndex = -1;
 int selectedImageIndex = -1;
 
+// Auto-sleep timer
+unsigned long lastActivityTime = 0;
+
 // ============================================================================
 // SETUP
 // ============================================================================
@@ -170,11 +173,16 @@ void loop() {
                         currentState = STATE_ERROR;
                     }
                 }
-                // Button 3: POWER
+                // Button 3: POWER OFF
                 else if (checkButtonPress(tx, ty, menuButtons[3])) {
                     drawPowerOffScreen();
                     delay(1000);
                     M5.Power.powerOff();
+                }
+                // Button 4: DEEP SLEEP
+                else if (menuButtons.size() > 4 && checkButtonPress(tx, ty, menuButtons[4])) {
+                    currentState = STATE_DEEP_SLEEP_CONFIRM;
+                    drawDeepSleepConfirm();
                 }
             }
             
@@ -182,12 +190,13 @@ void loop() {
             // STATE: LIST AUDIO (Remote Trigger)
             // ================================================================
             else if (currentState == STATE_LIST_AUDIO) {
-                // Check list items
-                int y = 100;
+                // Check list items (using new LIST_ITEM_HEIGHT)
+                int startY = STATUS_BAR_HEIGHT + 70;
                 bool itemSelected = false;
                 
                 for (size_t i = 0; i < recentAudio.size(); i++) {
-                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
                         itemSelected = true;
                         
                         // Trigger cloud processing for this audio file
@@ -202,7 +211,6 @@ void loop() {
                             if (triggerProcessAudio(selected.id)) {
                                 drawMessage("Processing Triggered!", 
                                     "Cloud processing has started for: " + selected.filename + ". Check back later for results.");
-                                // Stay in a temporary state to show message, then return to menu on tap
                                 currentState = STATE_PROCESSING;
                             } else {
                                 drawError("Failed to trigger processing. Please try again.");
@@ -211,11 +219,11 @@ void loop() {
                         }
                         break;
                     }
-                    y += 60;
                 }
                 
-                // Back button
-                if (!itemSelected && ty > h - 60 && tx < 120) {
+                // Back button (new position)
+                int backBtnY = SCREEN_HEIGHT - 70;
+                if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
@@ -242,11 +250,13 @@ void loop() {
             // STATE: LIST SUMMARIES
             // ================================================================
             else if (currentState == STATE_LIST_SUMMARIES) {
-                int y = 100;
+                // Check list items (using new LIST_ITEM_HEIGHT)
+                int startY = STATUS_BAR_HEIGHT + 70;
                 bool itemSelected = false;
                 
                 for (size_t i = 0; i < recentSummaries.size(); i++) {
-                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
                         itemSelected = true;
                         
                         SummaryFile& selected = recentSummaries[i];
@@ -291,11 +301,11 @@ void loop() {
                         drawEbookPage();
                         break;
                     }
-                    y += 60;
                 }
                 
-                // Back button
-                if (!itemSelected && ty > h - 60 && tx < 120) {
+                // Back button (new position)
+                int backBtnY = SCREEN_HEIGHT - 70;
+                if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
@@ -305,11 +315,13 @@ void loop() {
             // STATE: GALLERY
             // ================================================================
             else if (currentState == STATE_GALLERY) {
-                int y = 100;
+                // Check list items (using new LIST_ITEM_HEIGHT)
+                int startY = STATUS_BAR_HEIGHT + 70;
                 bool itemSelected = false;
                 
                 for (size_t i = 0; i < recentImages.size(); i++) {
-                    if (ty >= y && ty <= y + 50 && tx >= 20 && tx <= w - 20) {
+                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
                         itemSelected = true;
                         
                         ImageFile& selected = recentImages[i];
@@ -346,11 +358,11 @@ void loop() {
                         }
                         break;
                     }
-                    y += 60;
                 }
                 
-                // Back button
-                if (!itemSelected && ty > h - 60 && tx < 120) {
+                // Back button (new position)
+                int backBtnY = SCREEN_HEIGHT - 70;
+                if (!itemSelected && ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                     currentState = STATE_MENU;
                     drawMenu();
                 }
@@ -368,8 +380,9 @@ void loop() {
                         drawSummariesList();
                     }
                 } else {
-                    // Back button for images and errors (bottom left)
-                    if (ty > h - 60 && tx < 120) {
+                    // Back button for images and errors (updated position)
+                    int backBtnY = SCREEN_HEIGHT - 70;
+                    if (ty >= backBtnY && ty <= backBtnY + NAV_BTN_HEIGHT && tx >= PADDING_MEDIUM && tx <= PADDING_MEDIUM + NAV_BTN_WIDTH) {
                         if (currentState == STATE_VIEW_IMAGE) {
                             currentState = STATE_GALLERY;
                             drawGalleryList();
@@ -380,7 +393,43 @@ void loop() {
                     }
                 }
             }
+            
+            // ================================================================
+            // STATE: DEEP SLEEP CONFIRMATION
+            // ================================================================
+            else if (currentState == STATE_DEEP_SLEEP_CONFIRM) {
+                int btnY = SCREEN_HEIGHT / 2 + 30;
+                int btnSpacing = 30;
+                
+                // YES button
+                int yesBtnX = SCREEN_WIDTH / 2 - MENU_BTN_WIDTH - btnSpacing / 2;
+                if (tx >= yesBtnX && tx <= yesBtnX + MENU_BTN_WIDTH && ty >= btnY && ty <= btnY + 80) {
+                    drawDeepSleepScreen();
+                    delay(500);
+                    M5.Power.deepSleep();
+                }
+                
+                // CANCEL button
+                int cancelBtnX = SCREEN_WIDTH / 2 + btnSpacing / 2;
+                if (tx >= cancelBtnX && tx <= cancelBtnX + MENU_BTN_WIDTH && ty >= btnY && ty <= btnY + 80) {
+                    currentState = STATE_MENU;
+                    drawMenu();
+                }
+            }
+            
+            // Update activity time on any touch
+            lastActivityTime = millis();
         }
+    }
+    
+    // Anti-ghosting check
+    checkAndRefresh();
+    
+    // Auto-sleep after 10 minutes of inactivity
+    if (lastActivityTime > 0 && (millis() - lastActivityTime > AUTO_SLEEP_TIMEOUT)) {
+        drawDeepSleepScreen();
+        delay(500);
+        M5.Power.deepSleep();
     }
     
     delay(50);
