@@ -5,6 +5,11 @@
 #include <WString.h>
 #include "storage.h"
 
+// Include modular components
+#include "ebook_reader.h"
+#include "image_viewer.h"
+#include "display_refresh.h"
+
 // ============================================================================
 // DESIGN SYSTEM CONSTANTS
 // ============================================================================
@@ -79,7 +84,7 @@ enum AppState {
 };
 
 // ============================================================================
-// UI FUNCTIONS
+// UI FUNCTIONS - Core Display
 // ============================================================================
 void setupButtons();
 bool checkButtonPress(int x, int y, const Button& btn);
@@ -93,69 +98,22 @@ void drawMessage(const String& title, const String& msg);
 // Touch debounce threshold (ms)
 constexpr unsigned long TOUCH_DEBOUNCE_MS = 100;
 
+// ============================================================================
+// UI FUNCTIONS - Lists and Views
+// ============================================================================
 void drawList(String title, const std::vector<String>& items);
 void drawTextView(String text);
-void drawGallery(const std::vector<ImageFile>& images);
-void drawSummariesForInfographic(const std::vector<SummaryFile>& summaries);
-void drawInfographicsOnSD(const std::vector<String>& infographics);
-void drawImageMessage(const String& title, const String& message);
-void drawImageFromFile(const String& label, const String& path);
-void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len);
 void drawProcessing(const String& message = "Processing...");
 void drawError(const String& message);
 void drawPowerOffScreen();
 void drawDeepSleepConfirm();
 void drawDeepSleepScreen();
 
-// Anti-ghosting
-void checkAndRefresh();
-void forceFullRefresh();
-
 // ============================================================================
-// EBOOK READER STATE
-// ============================================================================
-struct EbookReader {
-    String fullText;
-    std::vector<String> pages;
-    int currentPage;
-    int totalPages;
-    int linesPerPage;
-    int charsPerLine;
-    int fontSize;  // Font size level: 0=16pt, 1=20pt, 2=24pt, 3=28pt
-    
-    EbookReader() : currentPage(0), totalPages(0), linesPerPage(12), charsPerLine(40), fontSize(1) {}
-    
-    void setText(const String& text);
-    void paginateText();
-    void nextPage();
-    void prevPage();
-    bool hasNextPage();
-    bool hasPrevPage();
-    String getCurrentPageText();
-    void increaseFontSize();
-    void decreaseFontSize();
-    void recalculateLayout();
-};
-
-// ============================================================================
-// DISPLAY STATE
+// DISPLAY STATE (extern declarations)
 // ============================================================================
 extern std::vector<Button> menuButtons;
 extern AppState currentState;
 extern String currentTextContent;
-extern EbookReader ebookReader;
-
-void drawEbookPage();
-bool handleEbookTouch(int x, int y);
-
-// ============================================================================
-// ANTI-GHOSTING & DIAGNOSTICS
-// ============================================================================
-void forceFullRefresh();
-void checkAndRefresh();
-void incrementPartialRefresh();
-void requestFullRefresh();
-void drawDiagnosticsScreen();
 
 #endif // DISPLAY_H
-
