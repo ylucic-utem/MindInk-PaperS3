@@ -29,6 +29,8 @@
 #include "display.h"
 #include "wifi_manager.h"
 #include "supabase_client.h"
+#include "config_manager.h"
+#include "memory_utils.h"
 
 // ============================================================================
 // GLOBAL STATE
@@ -46,8 +48,13 @@ int selectedImageIndex = -1;
 String pendingSummaryIdForInfographic = "";
 unsigned long infographicGenerationStartTime = 0;
 
-// Auto-sleep timer
+// =============================================================================
+// POWER MANAGEMENT STATE
+// =============================================================================
 unsigned long lastActivityTime = 0;
+unsigned long lastBatteryCheckTime = 0;
+bool idleWarningShown = false;
+int lastBatteryLevel = 100;
 
 // ============================================================================
 // SETUP
@@ -65,6 +72,12 @@ void setup() {
     delay(300);
     Serial.println("[DISPLAY] PAPERS3 display initialized");
 
+    // Initialize configuration (load saved preferences from NVS)
+    configInit();
+    
+    // Initialize memory monitoring
+    memInit();
+
     // Initialize storage systems (for caching)
     initStorage();
     
@@ -73,10 +86,17 @@ void setup() {
     
     // Initialize UI
     setupButtons();
+    
+    // Apply saved font size preference to ebook reader
+    ebookReader.fontSize = appConfig.fontSize;
+    
     drawMenu();
     
+    // Initialize activity timer
+    lastActivityTime = millis();
+    
     Serial.println("[SETUP] Complete - Cloud Remote & Viewer Mode");
-    Serial.printf("[MEMORY] Free Heap: %d bytes\n", ESP.getFreeHeap());
+    memPrintStatus();
 }
 
 // ============================================================================
@@ -418,28 +438,42 @@ void loop() {
             }
             
             // ================================================================
-            // STATE: GALLERY_SAVED (View saved infographics on SD)
+            // STATE: GALLERY_SAVED (View saved infographics on SD - Grid Layout)
             // ================================================================
             else if (currentState == STATE_GALLERY_SAVED) {
-                int startY = STATUS_BAR_HEIGHT + 70;
+                // Grid layout matching drawInfographicsOnSD
+                int gridStartY = STATUS_BAR_HEIGHT + 55;
+                int cellWidth = (SCREEN_WIDTH - 4 * PADDING_SMALL) / 3;
+                int cellHeight = 180;
+                int maxRows = (SCREEN_HEIGHT - gridStartY - 80) / cellHeight;
+                int maxItems = maxRows * 3;
                 bool itemSelected = false;
                 
                 std::vector<String> savedInfographics;
                 listInfographicsOnSD(savedInfographics);
                 
-                for (size_t i = 0; i < savedInfographics.size(); i++) {
-                    int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
-                    if (ty >= y && ty <= y + LIST_ITEM_HEIGHT && tx >= PADDING_MEDIUM && tx <= SCREEN_WIDTH - PADDING_MEDIUM) {
+                // Grid-based touch detection
+                for (size_t i = 0; i < savedInfographics.size() && (int)i < maxItems; i++) {
+                    int col = i % 3;
+                    int row = i / 3;
+                    int cellX = PADDING_SMALL + col * (cellWidth + PADDING_SMALL);
+                    int cellY = gridStartY + row * cellHeight;
+                    
+                    // Check if touch is within this grid cell
+                    if (tx >= cellX && tx <= cellX + cellWidth && ty >= cellY && ty <= cellY + cellHeight) {
                         itemSelected = true;
+                        selectedImageIndex = i;  // Track index for back navigation
                         
                         String filename = savedInfographics[i];
                         String localPath = "/infographics/" + filename;
+                        
+                        Serial.printf("[MAIN] Selected infographic %d: %s\n", i, filename.c_str());
                         
                         if (SD.exists(localPath)) {
                             drawImageFromFile(filename, localPath);
                             currentState = STATE_VIEW_IMAGE;
                         } else {
-                            drawError("File not found on SD card");
+                            drawError("File not found on SD card: " + localPath);
                             currentState = STATE_ERROR;
                         }
                         break;
@@ -519,14 +553,57 @@ void loop() {
             
             // Update activity time on any touch
             lastActivityTime = millis();
+            idleWarningShown = false; // Reset warning on activity
         }
     }
     
     // Anti-ghosting check
     checkAndRefresh();
     
-    // Auto-sleep after 10 minutes of inactivity
-    if (lastActivityTime > 0 && (millis() - lastActivityTime > AUTO_SLEEP_TIMEOUT)) {
+    // ==========================================================================
+    // POWER MANAGEMENT
+    // ==========================================================================
+    unsigned long now = millis();
+    unsigned long idleTime = (lastActivityTime > 0) ? (now - lastActivityTime) : 0;
+    
+    // Battery monitoring (every 60 seconds)
+    if (now - lastBatteryCheckTime > BATTERY_CHECK_INTERVAL) {
+        lastBatteryCheckTime = now;
+        lastBatteryLevel = M5.Power.getBatteryLevel();
+        Serial.printf("[POWER] Battery: %d%%\n", lastBatteryLevel);
+        
+        // Critical battery - force sleep immediately
+        if (lastBatteryLevel <= BATTERY_CRITICAL_THRESHOLD && lastBatteryLevel > 0) {
+            Serial.println("[POWER] CRITICAL battery! Entering deep sleep...");
+            drawMessage("Low Battery", "Battery critical. Entering sleep mode.");
+            delay(2000);
+            drawDeepSleepScreen();
+            delay(500);
+            M5.Power.deepSleep();
+        }
+        
+        // Low battery warning (show on menu only)
+        if (lastBatteryLevel <= BATTERY_LOW_THRESHOLD && currentState == STATE_MENU) {
+            Serial.printf("[POWER] Low battery warning: %d%%\n", lastBatteryLevel);
+        }
+    }
+    
+    // Idle warning (30 seconds before sleep)
+    if (lastActivityTime > 0 && idleTime > (AUTO_SLEEP_TIMEOUT - IDLE_WARNING_TIME) && !idleWarningShown) {
+        idleWarningShown = true;
+        Serial.println("[POWER] Idle warning - sleep in 30 seconds");
+        // Show brief message on status bar (don't interrupt current view)
+        // Just log for now - visual indicator can be added later
+    }
+    
+    // Auto-sleep after timeout
+    if (lastActivityTime > 0 && idleTime > AUTO_SLEEP_TIMEOUT) {
+        Serial.println("[POWER] Auto-sleep due to inactivity");
+        
+        // Proper shutdown sequence
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        
         drawDeepSleepScreen();
         delay(500);
         M5.Power.deepSleep();

@@ -36,8 +36,21 @@ constexpr int NAV_BTN_HEIGHT = 50;
 // Anti-ghosting refresh interval (5 minutes in ms)
 constexpr unsigned long GHOST_REFRESH_INTERVAL = 300000;
 
-// Auto-sleep timeout (10 minutes in ms)
-constexpr unsigned long AUTO_SLEEP_TIMEOUT = 600000;
+// =============================================================================
+// POWER MANAGEMENT CONSTANTS
+// =============================================================================
+// Auto-sleep timeout (3 minutes in ms for battery saving)
+constexpr unsigned long AUTO_SLEEP_TIMEOUT = 180000;
+
+// Idle warning (30 seconds before auto-sleep)
+constexpr unsigned long IDLE_WARNING_TIME = 30000;
+
+// Battery check interval (60 seconds)
+constexpr unsigned long BATTERY_CHECK_INTERVAL = 60000;
+
+// Battery thresholds
+constexpr int BATTERY_LOW_THRESHOLD = 15;
+constexpr int BATTERY_CRITICAL_THRESHOLD = 5;
 
 // ============================================================================
 // UI DATA STRUCTURES
@@ -71,9 +84,14 @@ enum AppState {
 void setupButtons();
 bool checkButtonPress(int x, int y, const Button& btn);
 void drawButton(const Button& btn);
+void drawButtonPressed(const Button& btn);   // Visual press feedback
+void showButtonFeedback(const Button& btn);  // Brief flash feedback
 void displayStatusBar();
 void drawMenu();
 void drawMessage(const String& title, const String& msg);
+
+// Touch debounce threshold (ms)
+constexpr unsigned long TOUCH_DEBOUNCE_MS = 100;
 
 void drawList(String title, const std::vector<String>& items);
 void drawTextView(String text);
@@ -130,4 +148,14 @@ extern EbookReader ebookReader;
 void drawEbookPage();
 bool handleEbookTouch(int x, int y);
 
+// ============================================================================
+// ANTI-GHOSTING & DIAGNOSTICS
+// ============================================================================
+void forceFullRefresh();
+void checkAndRefresh();
+void incrementPartialRefresh();
+void requestFullRefresh();
+void drawDiagnosticsScreen();
+
 #endif // DISPLAY_H
+

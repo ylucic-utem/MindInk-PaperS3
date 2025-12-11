@@ -14,7 +14,7 @@ static const char* REST_SUMMARY_PATH = "/rest/v1/summaries?select=id,audio_id,st
 static const char* REST_SUMMARY_LIST = "/rest/v1/summaries?select=id,audio_id,status,summary_storage_path&order=id.desc&limit=50";
 static const char* REST_IMAGE_LIST = "/rest/v1/infographics?select=id,summary_id,storage_path,image_file_name,generation_date&order=generation_date.desc&limit=50";
 
-static bool getJson(const String& url, const String& bearer, DynamicJsonDocument& doc) {
+static bool getJson(const String& url, const String& bearer, JsonDocument& doc) {
     if (!isWiFiConnected()) return false;
     HTTPClient http;
     WiFiClientSecure client;
@@ -52,7 +52,7 @@ bool fetchSupabaseAudio(std::vector<AudioFile>& out) {
     out.clear();
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
     String url = String(SUPABASE_URL) + REST_AUDIO_PATH;
-    DynamicJsonDocument doc(8192);
+    JsonDocument doc;
     if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
     if (!doc.is<JsonArray>()) return false;
     for (JsonObject obj : doc.as<JsonArray>()) {
@@ -70,7 +70,7 @@ bool fetchSupabaseAudio(std::vector<AudioFile>& out) {
 bool fetchSupabaseSummary(const String& audioId, SummaryFile& summary) {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
     String url = String(SUPABASE_URL) + REST_SUMMARY_PATH + audioId + "&limit=1";
-    DynamicJsonDocument doc(4096);
+    JsonDocument doc;
     if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
     if (!doc.is<JsonArray>() || doc.as<JsonArray>().size() == 0) return false;
     JsonObject obj = doc.as<JsonArray>()[0];
@@ -86,7 +86,7 @@ bool fetchSupabaseSummaries(std::vector<SummaryFile>& out) {
     out.clear();
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
     String url = String(SUPABASE_URL) + REST_SUMMARY_LIST;
-    DynamicJsonDocument doc(8192);
+    JsonDocument doc;
     if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
     if (!doc.is<JsonArray>()) return false;
     for (JsonObject obj : doc.as<JsonArray>()) {
@@ -105,7 +105,7 @@ bool fetchSupabaseImages(std::vector<ImageFile>& out) {
     out.clear();
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
     String url = String(SUPABASE_URL) + REST_IMAGE_LIST;
-    DynamicJsonDocument doc(8192);
+    JsonDocument doc;
     if (!getJson(url, SUPABASE_ANON_KEY, doc)) return false;
     if (!doc.is<JsonArray>()) return false;
     for (JsonObject obj : doc.as<JsonArray>()) {
@@ -196,7 +196,7 @@ static String callSignedUrl(const String& fn, const String& id) {
     http.addHeader("Authorization", "Bearer " + String(SUPABASE_EDGE_TOKEN));
     int code = http.GET();
     if (code != 200) { http.end(); return ""; }
-    DynamicJsonDocument doc(1024);
+    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, http.getString());
     http.end();
     if (err) return "";
@@ -309,7 +309,7 @@ bool triggerProcessAudio(const String& audioId) {
     http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "Bearer " + String(SUPABASE_EDGE_TOKEN));
-    StaticJsonDocument<128> body;
+    JsonDocument body;
     body["audio_id"] = audioId;
     String payload;
     serializeJson(body, payload);
@@ -327,7 +327,7 @@ bool triggerGenerateInfographic(const String& summaryId) {
     http.begin(client, url);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Authorization", "Bearer " + String(SUPABASE_EDGE_TOKEN));
-    StaticJsonDocument<128> body;
+    JsonDocument body;
     body["summary_id"] = summaryId;
     String payload;
     serializeJson(body, payload);
@@ -341,7 +341,7 @@ bool fetchAndSaveInfographicToSD(const String& summaryId, String& localPath) {
     
     // Query infographics table for entry with this summary_id
     String url = String(SUPABASE_URL) + "/rest/v1/infographics?select=id,image_file_name,storage_path&summary_id=eq." + summaryId + "&limit=1";
-    DynamicJsonDocument doc(2048);
+    JsonDocument doc;
     
     if (!getJson(url, SUPABASE_ANON_KEY, doc)) {
         Serial.println("[SUPABASE] Failed to query infographics table");

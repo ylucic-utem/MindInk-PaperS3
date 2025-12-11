@@ -1,5 +1,6 @@
 #include "display.h"
 #include "storage.h"
+#include "config_manager.h"
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <FS.h>
@@ -156,6 +157,7 @@ void EbookReader::increaseFontSize() {
     if (fontSize < 3) {
         fontSize++;
         recalculateLayout();
+        configSetFontSize(fontSize);  // Persist to NVS
     }
 }
 
@@ -163,6 +165,7 @@ void EbookReader::decreaseFontSize() {
     if (fontSize > 0) {
         fontSize--;
         recalculateLayout();
+        configSetFontSize(fontSize);  // Persist to NVS
     }
 }
 
@@ -226,6 +229,29 @@ void drawButton(const Button& btn) {
     M5.Display.setFont(nullptr); // Reset to default
 }
 
+// Touch feedback: draw button in pressed (inverted) state
+void drawButtonPressed(const Button& btn) {
+    // Fill with black background for pressed state
+    M5.Display.fillRoundRect(btn.x, btn.y, btn.w, btn.h, MENU_BTN_RADIUS, TFT_BLACK);
+    
+    // Draw text in white (inverted)
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.drawCenterString(btn.label, btn.x + btn.w/2, btn.y + btn.h/2 - 8);
+    M5.Display.setFont(nullptr);
+    
+    // Partial update for quick feedback
+    M5.Display.display();
+}
+
+// Show brief visual feedback then restore button
+void showButtonFeedback(const Button& btn) {
+    drawButtonPressed(btn);
+    delay(100); // Brief flash
+    drawButton(btn);
+    M5.Display.display();
+}
+
 void displayStatusBar() {
     // Draw status bar background (50px height)
     M5.Display.fillRect(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT, TFT_BLACK);
@@ -277,7 +303,6 @@ void displayStatusBar() {
 // ============================================================================
 
 void drawMenu() {
-    M5.Display.startWrite();
     M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
@@ -380,33 +405,135 @@ void drawGallery(const std::vector<ImageFile>& images) {
 }
 
 void drawSummariesForInfographic(const std::vector<SummaryFile>& summaries) {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("Create Infographic", M5.Display.width()/2, 50);
-    M5.Display.setTextSize(1);
-    M5.Display.drawString("Tap a summary:", PADDING_MEDIUM, 90);
     
-    drawList("", summaries.empty() ? std::vector<String>{"(No summaries available)"} : 
-        [&summaries]() {
-            std::vector<String> items;
-            for(const auto& s : summaries) {
-                items.push_back(s.filename);
-            }
-            return items;
-        }());
+    // Title
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_20);
+    M5.Display.drawCenterString("Create Infographic", SCREEN_WIDTH / 2, STATUS_BAR_HEIGHT + 15);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+    M5.Display.drawString("Select a summary:", PADDING_MEDIUM, STATUS_BAR_HEIGHT + 45);
+    
+    // List items
+    int startY = STATUS_BAR_HEIGHT + 70;
+    int maxItems = (SCREEN_HEIGHT - startY - 80) / (LIST_ITEM_HEIGHT + PADDING_SMALL);
+    
+    if (summaries.empty()) {
+        M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+        M5.Display.drawCenterString("(No summaries available)", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+    } else {
+        for (size_t i = 0; i < summaries.size() && (int)i < maxItems; i++) {
+            int y = startY + i * (LIST_ITEM_HEIGHT + PADDING_SMALL);
+            M5.Display.drawRoundRect(PADDING_MEDIUM, y, SCREEN_WIDTH - 2 * PADDING_MEDIUM, LIST_ITEM_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+            M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+            M5.Display.drawString(summaries[i].filename, PADDING_LARGE, y + (LIST_ITEM_HEIGHT - 16) / 2);
+        }
+    }
+    
+    // Back button
+    int backBtnY = SCREEN_HEIGHT - 70;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawInfographicsOnSD(const std::vector<String>& infographics) {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("Saved Infographics", M5.Display.width()/2, 50);
-    M5.Display.setTextSize(1);
     
-    drawList("", infographics.empty() ? std::vector<String>{"(No saved infographics)"} : infographics);
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_20);
+    M5.Display.drawCenterString("Saved Infographics", SCREEN_WIDTH / 2, STATUS_BAR_HEIGHT + 15);
+    
+    if (infographics.empty()) {
+        M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+        M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+        M5.Display.drawCenterString("No saved infographics", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+        
+        // Back button
+        int backBtnY = SCREEN_HEIGHT - 70;
+        M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+        M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+        M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    } else {
+        // Grid layout: 3 columns
+        int gridStartY = STATUS_BAR_HEIGHT + 55;
+        int cellWidth = (SCREEN_WIDTH - 4 * PADDING_SMALL) / 3;  // ~160px each
+        int cellHeight = 180;  // Height including filename
+        int thumbHeight = 140;
+        int maxRows = (SCREEN_HEIGHT - gridStartY - 80) / cellHeight;  // Rows that fit on screen
+        int maxItems = maxRows * 3;
+        
+        M5.Display.setFont(&fonts::lgfxJapanGothic_12);
+        
+        for (size_t i = 0; i < infographics.size() && (int)i < maxItems; i++) {
+            int col = i % 3;
+            int row = i / 3;
+            int cellX = PADDING_SMALL + col * (cellWidth + PADDING_SMALL);
+            int cellY = gridStartY + row * cellHeight;
+            
+            // Draw thumbnail placeholder (bordered rectangle with image icon)
+            M5.Display.drawRect(cellX, cellY, cellWidth, thumbHeight, TFT_BLACK);
+            M5.Display.drawRect(cellX + 1, cellY + 1, cellWidth - 2, thumbHeight - 2, TFT_DARKGREY);
+            
+            // Draw simple image icon in center
+            int iconCenterX = cellX + cellWidth / 2;
+            int iconCenterY = cellY + thumbHeight / 2;
+            // Mountain-like icon
+            M5.Display.drawLine(iconCenterX - 30, iconCenterY + 20, iconCenterX - 10, iconCenterY - 10, TFT_DARKGREY);
+            M5.Display.drawLine(iconCenterX - 10, iconCenterY - 10, iconCenterX, iconCenterY + 5, TFT_DARKGREY);
+            M5.Display.drawLine(iconCenterX, iconCenterY + 5, iconCenterX + 15, iconCenterY - 20, TFT_DARKGREY);
+            M5.Display.drawLine(iconCenterX + 15, iconCenterY - 20, iconCenterX + 30, iconCenterY + 20, TFT_DARKGREY);
+            
+            // Draw filename below thumbnail (truncated if too long)
+            String displayName = infographics[i];
+            // Remove path prefix if present
+            int lastSlash = displayName.lastIndexOf('/');
+            if (lastSlash >= 0) displayName = displayName.substring(lastSlash + 1);
+            // Truncate to fit cell width
+            if (displayName.length() > 14) {
+                displayName = displayName.substring(0, 11) + "...";
+            }
+            
+            M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+            M5.Display.drawCenterString(displayName, cellX + cellWidth / 2, cellY + thumbHeight + 8);
+            
+            // Item number for selection
+            M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+            M5.Display.fillRect(cellX + 2, cellY + 2, 20, 16, TFT_BLACK);
+            M5.Display.drawCenterString(String(i + 1), cellX + 12, cellY + 4);
+        }
+        
+        // Show scroll indicator if more items
+        if ((int)infographics.size() > maxItems) {
+            M5.Display.setFont(&fonts::lgfxJapanGothic_12);
+            M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+            String moreText = "+" + String(infographics.size() - maxItems) + " more";
+            M5.Display.drawCenterString(moreText, SCREEN_WIDTH / 2, SCREEN_HEIGHT - 90);
+        }
+        
+        // Back button
+        int backBtnY = SCREEN_HEIGHT - 70;
+        M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+        M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+        M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+        M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    }
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawImageMessage(const String& title, const String& message) {
@@ -423,100 +550,242 @@ void drawImageMessage(const String& title, const String& message) {
 }
 
 void drawImageFromFile(const String& label, const String& path) {
+    Serial.printf("[DISPLAY] drawImageFromFile: label='%s', path='%s'\n", label.c_str(), path.c_str());
+    
+    // Set EPD mode for quality refresh (important for images on e-ink)
+    // epd_quality gives the best image quality for photos
+    M5.Display.setEpdMode(epd_mode_t::epd_quality);
+    
+    // Clear display first with anti-ghosting
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
-    displayStatusBar();
-    
-    // Only show label if it's not just a filename
-    if (!label.isEmpty() && !label.startsWith("infographic-")) {
-        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-        M5.Display.setTextSize(2);
-        M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
-    }
-
-    bool drawn = false;
-    
-    // Use filename-only overloads; M5GFX handles SD internally
-    // Display handles dithering automatically when in EPD mode
-    int rc = -1;
-    if (path.endsWith(".png")) {
-        rc = M5.Display.drawPngFile(path.c_str(), 0, STATUS_BAR_HEIGHT);
-        drawn = (rc == 0);
-    } else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
-        rc = M5.Display.drawJpgFile(path.c_str(), 0, STATUS_BAR_HEIGHT);
-        drawn = (rc == 0);
-    }
-
-    if (!drawn) {
-        M5.Display.setTextSize(1);
-        M5.Display.drawCenterString("Unable to load image", M5.Display.width()/2, M5.Display.height()/2 - 20);
-        M5.Display.drawCenterString("Format: " + path.substring(path.lastIndexOf('.')), M5.Display.width()/2, M5.Display.height()/2);
-        M5.Display.drawCenterString("RC: " + String(rc), M5.Display.width()/2, M5.Display.height()/2 + 20);
-    }
-
-    // Draw BACK button at bottom
-    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
-    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
-
     M5.Display.endWrite();
-    // Force refresh on e-ink
     M5.Display.display();
-}
-
-void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
+    M5.Display.waitDisplay();
+    
+    bool drawn = false;
+    int rc = -1;
+    
+    // Check if file exists first
+    if (!SD.exists(path)) {
+        Serial.printf("[DISPLAY] File does NOT exist: %s\n", path.c_str());
+        M5.Display.startWrite();
+        M5.Display.fillScreen(TFT_WHITE);
+        displayStatusBar();
+        M5.Display.setFont(&fonts::lgfxJapanGothic_20);
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.drawCenterString("File not found!", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 20);
+        M5.Display.drawCenterString(path, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20);
+        
+        // Draw BACK button
+        int backBtnY = SCREEN_HEIGHT - 70;
+        M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+        M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+        M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+        M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+        M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+        M5.Display.setFont(nullptr);
+        M5.Display.endWrite();
+        M5.Display.display();
+        M5.Display.waitDisplay();
+        return;
+    }
+    
+    // Get file info
+    File imgFile = SD.open(path, FILE_READ);
+    size_t fileSize = 0;
+    if (imgFile) {
+        fileSize = imgFile.size();
+        imgFile.close();
+        Serial.printf("[DISPLAY] File found, size: %lu bytes\n", fileSize);
+    }
+    
+    // Calculate display area
+    int displayAreaY = STATUS_BAR_HEIGHT;
+    int displayAreaHeight = SCREEN_HEIGHT - STATUS_BAR_HEIGHT - 80;
+    int displayAreaWidth = SCREEN_WIDTH;
+    
+    Serial.printf("[DISPLAY] Display area: %dx%d at y=%d\n", displayAreaWidth, displayAreaHeight, displayAreaY);
+    
+    // Start drawing
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
-    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString(label, M5.Display.width()/2, 40);
-    M5.Display.setTextSize(1);
-
-    // Attempt PNG first; fall back to JPG.
-    // Both formats will be dithered automatically by M5Unified for e-ink displays
-    bool drawn = false;
-    if (M5.Display.drawPng(data, len, 0, 60) == 0) {
-        drawn = true;
-    } else if (M5.Display.drawJpg(data, len, 0, 60) == 0) {
-        drawn = true;
+    
+    // Draw the image using M5GFX
+    // For e-ink, try drawing centered with proper scaling
+    if (path.endsWith(".png")) {
+        Serial.println("[DISPLAY] Attempting to draw PNG...");
+        
+        // Try with explicit maxWidth/maxHeight for scaling
+        rc = M5.Display.drawPngFile(
+            path.c_str(),
+            0,                    // x - left aligned
+            displayAreaY,         // y - below status bar
+            displayAreaWidth,     // maxWidth
+            displayAreaHeight,    // maxHeight
+            0, 0,                 // offX, offY
+            1.0f, 1.0f,           // scaleX, scaleY (auto-scale within max bounds)
+            datum_t::top_left
+        );
+        
+        Serial.printf("[DISPLAY] drawPngFile result: rc=%d\n", rc);
+        drawn = (rc == 0);
+        
+    } else if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+        Serial.println("[DISPLAY] Attempting to draw JPEG...");
+        
+        rc = M5.Display.drawJpgFile(
+            path.c_str(),
+            0, displayAreaY,
+            displayAreaWidth, displayAreaHeight,
+            0, 0, 1.0f, 1.0f,
+            datum_t::top_left
+        );
+        
+        Serial.printf("[DISPLAY] drawJpgFile result: rc=%d\n", rc);
+        drawn = (rc == 0);
     }
 
-    if (!drawn) {
-        M5.Display.drawCenterString("Unable to render image", M5.Display.width()/2, M5.Display.height()/2);
+    if (drawn) {
+        Serial.println("[DISPLAY] Image drawn successfully to framebuffer");
+    } else {
+        Serial.printf("[DISPLAY] Failed to draw image. RC=%d\n", rc);
+        
+        M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.drawCenterString("Error loading image", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 40);
+        M5.Display.drawCenterString("File: " + path.substring(path.lastIndexOf('/') + 1), SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 10);
+        M5.Display.drawCenterString("Size: " + String(fileSize) + " bytes", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 20);
+        M5.Display.drawCenterString("Error code: " + String(rc), SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 50);
+        M5.Display.setFont(nullptr);
     }
 
     // Draw BACK button
-    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    int backBtnY = SCREEN_HEIGHT - 70;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    M5.Display.setFont(nullptr);
+
+    M5.Display.endWrite();
+    
+    // Force full EPD refresh for e-ink display
+    Serial.println("[DISPLAY] Triggering display refresh...");
+    M5.Display.display();
+    M5.Display.waitDisplay();
+    
+    // Reset EPD mode to faster mode for UI interactions
+    M5.Display.setEpdMode(epd_mode_t::epd_fast);
+    
+    Serial.println("[DISPLAY] Display refresh complete");
+}
+
+void drawImageFromBuffer(const String& label, const uint8_t* data, size_t len) {
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    
+    Serial.printf("[DISPLAY] drawImageFromBuffer: label='%s', len=%d bytes\n", label.c_str(), len);
+    
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.drawCenterString(label, M5.Display.width()/2, STATUS_BAR_HEIGHT + 10);
+
+    int displayAreaY = STATUS_BAR_HEIGHT + 30;
+
+    // Attempt PNG first; fall back to JPG.
+    // Use simple version without scaling to avoid M5GFX template issues
+    bool drawn = false;
+    int rc = M5.Display.drawPng(data, len, 0, displayAreaY);
+    Serial.printf("[DISPLAY] drawPng(buffer) rc=%d\n", rc);
+    
+    if (rc != 0) {
+        // Try JPG
+        rc = M5.Display.drawJpg(data, len, 0, displayAreaY);
+        Serial.printf("[DISPLAY] drawJpg(buffer) rc=%d\n", rc);
+    }
+    drawn = (rc == 0);
+
+    if (!drawn) {
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+        M5.Display.drawCenterString("Unable to render image", M5.Display.width()/2, M5.Display.height()/2 - 20);
+        M5.Display.drawCenterString("Size: " + String(len) + " bytes", M5.Display.width()/2, M5.Display.height()/2);
+        M5.Display.drawCenterString("RC: " + String(rc), M5.Display.width()/2, M5.Display.height()/2 + 20);
+        Serial.printf("[DISPLAY] Failed to render buffer image. RC=%d\n", rc);
+    }
+
+    // Draw BACK button
+    int backBtnY = SCREEN_HEIGHT - 60;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, 45, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, 45, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 14);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawProcessing(const String& message) {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString(message, M5.Display.width()/2, M5.Display.height()/2 - 20);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString(message, M5.Display.width()/2, M5.Display.height()/2 - 30);
     
-    M5.Display.setTextSize(1);
-    M5.Display.drawCenterString("Please wait...", M5.Display.width()/2, M5.Display.height()/2 + 40);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_WHITE);
+    M5.Display.drawCenterString("Please wait...", M5.Display.width()/2, M5.Display.height()/2 + 30);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
 
 void drawError(const String& message) {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     displayStatusBar();
     
     M5.Display.setTextColor(TFT_RED, TFT_WHITE);
-    M5.Display.setTextSize(2);
-    M5.Display.drawCenterString("ERROR", M5.Display.width()/2, 50);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.drawCenterString("ERROR", M5.Display.width()/2, STATUS_BAR_HEIGHT + 40);
     
-    M5.Display.setTextSize(1);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.drawString(message, 20, M5.Display.height()/2);
     
-    M5.Display.fillRect(20, M5.Display.height() - 60, 100, 40, TFT_LIGHTGREY);
+    // Word wrap error message
+    int maxWidth = SCREEN_WIDTH - 2 * PADDING_LARGE;
+    int lineY = SCREEN_HEIGHT / 2 - 40;
+    String remaining = message;
+    while (remaining.length() > 0 && lineY < SCREEN_HEIGHT - 100) {
+        int charCount = min((int)remaining.length(), 50);  // Max chars per line
+        while (charCount > 0 && M5.Display.textWidth(remaining.substring(0, charCount)) > maxWidth) {
+            charCount--;
+        }
+        if (charCount == 0) charCount = 1;
+        M5.Display.drawCenterString(remaining.substring(0, charCount), SCREEN_WIDTH / 2, lineY);
+        remaining = remaining.substring(charCount);
+        remaining.trim();
+        lineY += 25;
+    }
+    
+    // Back button (consistent with touch handler)
+    int backBtnY = SCREEN_HEIGHT - 70;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
     M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
-    M5.Display.drawCenterString("BACK", 70, M5.Display.height() - 45);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
 
 // Helper to draw a standard control button
@@ -592,10 +861,14 @@ void drawMessage(const String& title, const String& msg) {
 // ============================================================================
 
 void drawPowerOffScreen() {
+    M5.Display.startWrite();
     M5.Display.fillScreen(TFT_WHITE);
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setTextSize(4);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_28);
     M5.Display.drawCenterString("MindInk", M5.Display.width()/2, M5.Display.height()/2 - 20);
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();  // Force e-ink refresh
 }
 
 // ============================================================================
@@ -710,6 +983,28 @@ void drawEbookPage() {
         M5.Display.drawCenterString("NEXT >", nextBtnX + (NAV_BTN_WIDTH - 20) / 2, btnY + (NAV_BTN_HEIGHT - 16) / 2);
     }
     
+    // ==========================================================================
+    // PROGRESS BAR
+    // ==========================================================================
+    int progressBarY = SCREEN_HEIGHT - 15;
+    int progressBarWidth = SCREEN_WIDTH - 2 * PADDING_MEDIUM;
+    int progressBarHeight = 8;
+    
+    // Calculate progress percentage
+    float progress = (ebookReader.totalPages > 0) 
+        ? (float)(ebookReader.currentPage + 1) / (float)ebookReader.totalPages 
+        : 0.0f;
+    int filledWidth = (int)(progressBarWidth * progress);
+    
+    // Draw progress bar background
+    M5.Display.fillRect(PADDING_MEDIUM, progressBarY, progressBarWidth, progressBarHeight, TFT_LIGHTGREY);
+    M5.Display.drawRect(PADDING_MEDIUM, progressBarY, progressBarWidth, progressBarHeight, TFT_BLACK);
+    
+    // Draw filled portion
+    if (filledWidth > 0) {
+        M5.Display.fillRect(PADDING_MEDIUM + 1, progressBarY + 1, filledWidth - 2, progressBarHeight - 2, TFT_BLACK);
+    }
+    
     M5.Display.setFont(nullptr);
     M5.Display.endWrite();
 }
@@ -758,6 +1053,29 @@ bool handleEbookTouch(int x, int y) {
         return true;
     }
     
+    // ==========================================================================
+    // TAP-TO-NAVIGATE ZONES (in reading area, not on buttons)
+    // ==========================================================================
+    // Reading area: from separator to button bar
+    int readingAreaTop = STATUS_BAR_HEIGHT + 50;
+    int readingAreaBottom = btnY - 10;
+    
+    if (y >= readingAreaTop && y < readingAreaBottom) {
+        // Left 1/3 of screen: previous page
+        if (x < SCREEN_WIDTH / 3 && ebookReader.hasPrevPage()) {
+            ebookReader.prevPage();
+            drawEbookPage();
+            return true;
+        }
+        // Right 1/3 of screen: next page
+        if (x > 2 * SCREEN_WIDTH / 3 && ebookReader.hasNextPage()) {
+            ebookReader.nextPage();
+            drawEbookPage();
+            return true;
+        }
+        // Center area: do nothing (could add bookmark later)
+    }
+    
     return true; // Stay in ebook view
 }
 
@@ -800,38 +1118,62 @@ void drawDeepSleepConfirm() {
 }
 
 void drawDeepSleepScreen() {
+    M5.Display.startWrite();
     // Full refresh before sleep (anti-ghosting)
     M5.Display.fillScreen(TFT_BLACK);
-    delay(100);
+    M5.Display.display();  // Push black screen
+    delay(200);
     M5.Display.fillScreen(TFT_WHITE);
     
     // Display "MindInk" centered
     M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-    M5.Display.setFont(&fonts::lgfxJapanGothic_24);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_28);
     M5.Display.drawCenterString("MindInk", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 20);
     M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();  // Force e-ink refresh to show message
 }
 
 // ============================================================================
-// ANTI-GHOSTING
+// ANTI-GHOSTING & DISPLAY REFRESH OPTIMIZATION
 // ============================================================================
 
 // Global variables for anti-ghosting
 static unsigned long lastFullRefresh = 0;
+static int partialRefreshCount = 0;
+
+// Force full refresh every N partial updates (prevents ghost buildup)
+constexpr int PARTIAL_REFRESH_THRESHOLD = 5;
 
 void forceFullRefresh() {
+    Serial.println("[DISPLAY] Performing full refresh (anti-ghosting)");
+    
     // Flash screen black then white to clear ghosting
     M5.Display.fillScreen(TFT_BLACK);
-    delay(50);
+    M5.Display.display();
+    delay(100);
     M5.Display.fillScreen(TFT_WHITE);
-    delay(50);
+    M5.Display.display();
+    delay(100);
+    
     lastFullRefresh = millis();
+    partialRefreshCount = 0;
+}
+
+void incrementPartialRefresh() {
+    partialRefreshCount++;
+    if (partialRefreshCount >= PARTIAL_REFRESH_THRESHOLD) {
+        Serial.printf("[DISPLAY] Partial refresh count %d reached threshold\n", partialRefreshCount);
+        forceFullRefresh();
+    }
 }
 
 void checkAndRefresh() {
     unsigned long now = millis();
+    
+    // Time-based refresh (every 5 minutes)
     if (now - lastFullRefresh > GHOST_REFRESH_INTERVAL) {
-        // Perform anti-ghosting refresh
+        Serial.println("[DISPLAY] Time-based anti-ghosting refresh");
         forceFullRefresh();
         
         // Redraw current screen based on state
@@ -842,9 +1184,121 @@ void checkAndRefresh() {
             case STATE_VIEW_SUMMARY:
                 drawEbookPage();
                 break;
-            // Other states will be redrawn when next action occurs
+            case STATE_LIST_AUDIO:
+            case STATE_LIST_SUMMARIES:
+                // These will be redrawn on next user action
+                break;
+            case STATE_GALLERY_SAVED:
+                // Will redraw on next action
+                break;
             default:
+                // Other states will be redrawn when next action occurs
                 break;
         }
     }
+}
+
+// Request full refresh before next draw (useful for image display)
+void requestFullRefresh() {
+    partialRefreshCount = PARTIAL_REFRESH_THRESHOLD;
+}
+
+// ============================================================================
+// DIAGNOSTICS SCREEN
+// ============================================================================
+
+void drawDiagnosticsScreen() {
+    M5.Display.startWrite();
+    M5.Display.fillScreen(TFT_WHITE);
+    displayStatusBar();
+    
+    M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+    M5.Display.setFont(&fonts::lgfxJapanGothic_20);
+    M5.Display.drawCenterString("System Diagnostics", SCREEN_WIDTH / 2, STATUS_BAR_HEIGHT + 20);
+    
+    M5.Display.setFont(&fonts::lgfxJapanGothic_16);
+    int y = STATUS_BAR_HEIGHT + 70;
+    int lineHeight = 35;
+    
+    // Memory info
+    M5.Display.drawString("Heap Free:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(String(ESP.getFreeHeap() / 1024) + " KB", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    M5.Display.drawString("Heap Total:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(String(ESP.getHeapSize() / 1024) + " KB", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    M5.Display.drawString("PSRAM Free:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(String(ESP.getFreePsram() / 1024) + " KB", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    M5.Display.drawString("PSRAM Total:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(String(ESP.getPsramSize() / 1024) + " KB", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight + 10;
+    
+    // Divider
+    M5.Display.drawLine(PADDING_MEDIUM, y, SCREEN_WIDTH - PADDING_MEDIUM, y, TFT_BLACK);
+    y += 15;
+    
+    // Power info
+    M5.Display.drawString("Battery:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(String(M5.Power.getBatteryLevel()) + "%", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    M5.Display.drawString("Charging:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(M5.Power.isCharging() ? "Yes" : "No", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight + 10;
+    
+    // Divider
+    M5.Display.drawLine(PADDING_MEDIUM, y, SCREEN_WIDTH - PADDING_MEDIUM, y, TFT_BLACK);
+    y += 15;
+    
+    // WiFi info
+    M5.Display.drawString("WiFi Status:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        M5.Display.drawString("RSSI:", PADDING_MEDIUM, y);
+        M5.Display.drawRightString(String(WiFi.RSSI()) + " dBm", SCREEN_WIDTH - PADDING_MEDIUM, y);
+        y += lineHeight;
+        
+        M5.Display.drawString("IP:", PADDING_MEDIUM, y);
+        M5.Display.drawRightString(WiFi.localIP().toString(), SCREEN_WIDTH - PADDING_MEDIUM, y);
+        y += lineHeight;
+    }
+    
+    y += 10;
+    // Divider
+    M5.Display.drawLine(PADDING_MEDIUM, y, SCREEN_WIDTH - PADDING_MEDIUM, y, TFT_BLACK);
+    y += 15;
+    
+    // Storage info
+    M5.Display.drawString("Storage:", PADDING_MEDIUM, y);
+    String storageType = storage.activeStorage == STORAGE_SD ? "SD Card" : 
+                         (storage.activeStorage == STORAGE_PSRAM ? "PSRAM" : "None");
+    M5.Display.drawRightString(storageType, SCREEN_WIDTH - PADDING_MEDIUM, y);
+    y += lineHeight;
+    
+    M5.Display.drawString("SD Available:", PADDING_MEDIUM, y);
+    M5.Display.drawRightString(storage.sdAvailable ? "Yes" : "No", SCREEN_WIDTH - PADDING_MEDIUM, y);
+    
+    // Back button
+    int backBtnY = SCREEN_HEIGHT - 70;
+    M5.Display.fillRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_LIGHTGREY);
+    M5.Display.drawRoundRect(PADDING_MEDIUM, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_BLACK, TFT_LIGHTGREY);
+    M5.Display.drawCenterString("BACK", PADDING_MEDIUM + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    
+    // Refresh button
+    int refreshBtnX = SCREEN_WIDTH - PADDING_MEDIUM - NAV_BTN_WIDTH;
+    M5.Display.fillRoundRect(refreshBtnX, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_DARKGREY);
+    M5.Display.drawRoundRect(refreshBtnX, backBtnY, NAV_BTN_WIDTH, NAV_BTN_HEIGHT, LIST_ITEM_RADIUS, TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREY);
+    M5.Display.drawCenterString("REFRESH", refreshBtnX + NAV_BTN_WIDTH / 2, backBtnY + 15);
+    
+    M5.Display.setFont(nullptr);
+    M5.Display.endWrite();
+    M5.Display.display();
 }
